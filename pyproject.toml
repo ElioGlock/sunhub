@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sunhub"
+version = "0.2.0"
+description = "Hub local de conhecimento (skills, ADRs, guidelines, antipatterns) sincronizado de repositórios Git e exposto a agentes via MCP, CLI e GUI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Elio Junior" }]
+classifiers = ["Operating System :: POSIX :: Linux", "Programming Language :: Python :: 3"]
+dependencies = [
+  "typer>=0.12",
+  "pyyaml>=6",
+  "tomli>=2; python_version < '3.11'",
+  "tomli-w>=1",
+  "mcp>=1.2",
+  "PySide6-Essentials>=6.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+sunhub = "sunhub.cli:main"
+
+[project.gui-scripts]
+sunhub-app = "sunhub.desktop.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sunhub"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
