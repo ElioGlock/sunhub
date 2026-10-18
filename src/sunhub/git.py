@@ -54,21 +54,42 @@ def _friendly(msg: str) -> str:
     return msg
 
 
-def clone(url: str, dest: Path, branch: str | None = None, sparse_paths: list[str] | None = None) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    args = ["clone", "--quiet", "--filter=blob:none"]
-    if branch:
-        args += ["--branch", branch]
-    if sparse_paths:
-        args.append("--sparse")
-    args += ["--", url, str(dest)]
+def _is_partial(repo: Path) -> bool:
     try:
-        run(args, timeout=1800)
-        if sparse_paths:
-            run(["sparse-checkout", "set", "--", *sparse_paths], cwd=dest)
+        return run(["config", "--get", "remote.origin.promisor"], cwd=repo) == "true"
     except GitError:
-        shutil.rmtree(dest, ignore_errors=True)
-        raise
+        return False
+
+
+def clone(url: str, dest: Path, branch: str | None = None, sparse_paths: list[str] | None = None,
+          reference: Path | None = None) -> None:
+    """Clona o repositório completo (histórico de texto é pequeno e permite reaproveitar objetos).
+
+    Com `reference` (outro clone do mesmo repositório), reaproveita os objetos que já existem
+    localmente e baixa só o que falta; `--dissociate` mantém os dois clones independentes.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    use_ref = bool(reference and (reference / ".git").exists() and not _is_partial(reference))
+    attempts = [True, False] if use_ref else [False]
+    for with_ref in attempts:
+        args = ["clone", "--quiet"]
+        if with_ref:
+            args += ["--reference-if-able", str(reference), "--dissociate"]
+        if branch:
+            args += ["--branch", branch]
+        if sparse_paths:
+            args.append("--sparse")
+        args += ["--", url, str(dest)]
+        try:
+            run(args, timeout=1800)
+            if sparse_paths:
+                run(["sparse-checkout", "set", "--", *sparse_paths], cwd=dest)
+            return
+        except GitError:
+            shutil.rmtree(dest, ignore_errors=True)
+            if with_ref:
+                continue  # sem reaproveitar objetos, tenta de novo
+            raise
 
 
 def head(repo: Path) -> str:
@@ -133,3 +154,7 @@ def ls_remote(url: str) -> bool:
         return True
     except GitError:
         return False
+
+
+def merge_base(repo: Path, a: str, b: str) -> str:
+    return run(["merge-base", a, b], cwd=repo)

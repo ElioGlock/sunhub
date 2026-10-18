@@ -1,9 +1,11 @@
 """Atualização automática com systemd --user (sem daemon próprio, sem sudo)."""
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sunhub import paths
@@ -89,3 +91,35 @@ def status() -> str:
         return "unavailable"
     p = _systemctl("is-active", f"{UNIT}.timer")
     return "active" if p.stdout.strip() == "active" else "inactive"
+
+
+_TS = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+
+
+def _show(prop: str) -> str:
+    p = _systemctl("show", f"{UNIT}.timer", "-p", prop, "--value")
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def _local(text: str) -> datetime | None:
+    m = _TS.search(text or "")
+    return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S") if m else None
+
+
+def schedule(interval_minutes: int, last_sync: datetime | None = None) -> dict:
+    """{'status', 'last', 'next'} com horários locais (sem fuso).
+
+    O timer é relativo à última execução (OnUnitActiveSec), então o systemd nem sempre informa um
+    horário absoluto: nesse caso, próxima = última execução + intervalo.
+    """
+    info: dict = {"status": status(), "last": None, "next": None}
+    if info["status"] != "active":
+        return info
+    last = _local(_show("LastTriggerUSec"))
+    if last is None and last_sync is not None:
+        last = last_sync.astimezone().replace(tzinfo=None)
+    nxt = _local(_show("NextElapseUSecRealtime"))
+    if nxt is None and last is not None:
+        nxt = last + timedelta(minutes=interval_minutes)
+    info.update(last=last, next=nxt)
+    return info

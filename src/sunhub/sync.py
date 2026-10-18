@@ -6,6 +6,7 @@ import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Iterator
 
 from sunhub import config, git, indexer, linker, paths
@@ -48,7 +49,45 @@ def sync_lock(blocking: bool = True) -> Iterator[None]:
         f.close()
 
 
-def sync_source(src: Source, store: Store, full: bool = False) -> SyncResult:
+def overlay_base(cfg: Config, src: Source) -> Source | None:
+    """Outra fonte, cadastrada antes, do MESMO repositório em outra branch.
+
+    Nesse caso `src` é uma variação: o Sunhub baixa só os objetos que faltam e indexa só o que a
+    branch tem de diferente (ex.: uma skill nova), sem duplicar o resto.
+    """
+    if not src.is_git:
+        return None
+    key = config.norm_url(src.url)
+    for s in cfg.sources:
+        if s is src:
+            return None
+        if s.is_git and s.enabled and config.norm_url(s.url) == key and (s.branch or None) != (src.branch or None):
+            return s
+    return None
+
+
+def _overlay_docs(src: Source, root, base: Source, commit: str | None):
+    """Documentos que a branch adicionou ou mudou desde que saiu da branch base."""
+    base_branch = base.branch or git.default_branch(root) or git.default_branch(base.checkout_dir())
+    if not base_branch:
+        return None
+    try:
+        mb = git.merge_base(root, "HEAD", f"origin/{base_branch}")
+        changes = git.changed_files(root, mb, "HEAD")
+    except git.GitError:
+        return None
+    paths_ = {(b or a) for status, a, b in changes if status != "D"}
+    for p in list(paths_):  # arquivo de dentro de uma skill → publica a skill inteira
+        parent = PurePosixPath(p).parent
+        while str(parent) not in ("", "."):
+            if (root / parent / indexer.SKILL_FILE).is_file():
+                paths_.add(str(parent / indexer.SKILL_FILE))
+                break
+            parent = parent.parent
+    return indexer.index_paths(src.name, root, sorted(paths_), commit)
+
+
+def sync_source(src: Source, store: Store, full: bool = False, base: Source | None = None) -> SyncResult:
     root = src.checkout_dir()
     try:
         commit = None
@@ -57,7 +96,7 @@ def sync_source(src: Source, store: Store, full: bool = False) -> SyncResult:
             if not (root / ".git").exists():
                 if root.exists() and any(root.iterdir()):
                     raise SyncError(f"{root} já existe e não é um clone do Sunhub")
-                git.clone(src.url, root, src.branch, src.paths)
+                git.clone(src.url, root, src.branch, src.paths, reference=base.checkout_dir() if base else None)
                 if src.ref:
                     git.checkout(root, src.ref)
                 new = git.head(root)
@@ -70,6 +109,14 @@ def sync_source(src: Source, store: Store, full: bool = False) -> SyncResult:
             if not root.is_dir():
                 raise SyncError(f"pasta local não encontrada: {root}")
             detail = "pasta local reindexada"
+
+        if base:
+            docs = _overlay_docs(src, root, base, commit)
+            if docs is not None:
+                store.replace_source(src.name, docs)
+                store.set_state(src.name, commit, None)
+                return SyncResult(src.name, True, old is None or old != new, store.count(src.name), commit, None,
+                                  f"{detail}; só diferenças em relação a {base.name}")
 
         changed = old is None or old != new
         incremental = bool(src.is_git and old and new and old != new and not full and store.count(src.name) > 0)
@@ -97,7 +144,10 @@ def sync_all(cfg: Config, store: Store, names: list[str] | None = None, full: bo
         for n in names:
             cfg.require(n)
     with sync_lock(blocking):
-        results = [sync_source(s, store, full) for s in cfg.enabled_sources if not names or s.name in names]
+        chosen = [s for s in cfg.enabled_sources if not names or s.name in names]
+        bases = {s.name: overlay_base(cfg, s) for s in chosen}
+        chosen.sort(key=lambda s: bases[s.name] is not None)  # bases antes das variações
+        results = [sync_source(s, store, full, bases[s.name]) for s in chosen]
         report = linker.relink(cfg, store) if relink else None
         _log(results)
     return results, report
@@ -113,6 +163,7 @@ def add_source(cfg: Config, store: Store, src: Source, sync: bool = True) -> Syn
 
 
 def remove_source(cfg: Config, store: Store, name: str) -> Source:
+    dependents = [s.name for s in cfg.sources if (b := overlay_base(cfg, s)) is not None and b.name == name]
     src = cfg.remove(name)
     config.save(cfg)
     store.delete_source(name)
@@ -121,7 +172,10 @@ def remove_source(cfg: Config, store: Store, name: str) -> Source:
         base = paths.sources_dir().resolve()
         if root.parent == base and root.exists():  # só apaga clones gerenciados
             shutil.rmtree(root)
-    linker.relink(cfg, store)
+    if dependents:  # variações que dependiam desta fonte passam a ter o conteúdo completo
+        sync_all(cfg, store, names=dependents, full=True)
+    else:
+        linker.relink(cfg, store)
     return src
 
 

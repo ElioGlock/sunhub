@@ -13,15 +13,16 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QIntValidator, QKeySequence, QShortcut
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QSpinBox, QSplitter, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 from sunhub import __version__, actions, clients, config, doctor, indexer, linker, paths, systemd
+from sunhub.sync import overlay_base
 from sunhub.config import LINK_MODES, LINK_TARGETS, ConfigError
 from sunhub.desktop import theme
 from sunhub.models import KIND_LABELS, KINDS, Document
@@ -120,6 +121,23 @@ def tag(text: str, kind: str = "neutral") -> QLabel:
     t = label(text, tag=kind)
     t.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
     return t
+
+
+def schedule_text(cfg: config.Config) -> tuple[str, str]:
+    """(texto curto, nível) da próxima verificação automática."""
+    with Store() as st:
+        last_sync = st.last_sync()
+    info = systemd.schedule(cfg.settings.sync_interval_minutes, last_sync)
+    if info["status"] != "active":
+        return "Atualização automática desligada (ative em Integrações)", "warn"
+    every = f"a cada {cfg.settings.sync_interval_minutes} min"
+    nxt = info["next"]
+    if not nxt:
+        return f"Atualização automática ligada, {every}", "ok"
+    mins = int((nxt - datetime.now()).total_seconds() // 60)
+    when = "em instantes" if mins <= 0 else (f"em {mins} min" if mins < 120 else f"em {mins // 60} h {mins % 60} min")
+    last = f" · última às {info['last']:%H:%M}" if info["last"] else ""
+    return f"Próxima verificação às {nxt:%H:%M} ({when}), {every}{last}", "ok"
 
 
 SINGULAR = {"skill": "skill", "adr": "ADR", "guideline": "guideline", "antipattern": "antipattern", "doc": "doc"}
@@ -270,6 +288,8 @@ class SourcesPage(Page):
         sync_btn = button("Sincronizar tudo", self.sync_all, primary=True, tip="git fetch em todas as fontes (Ctrl+R)")
         win.register_action(sync_btn)
         self.subtitle = self.header("Fontes", "", sync_btn)
+        self.schedule = label("", wrap=True, muted=True)
+        self.body.addWidget(self.schedule)
 
         box, lay = card(10)
         lay.addWidget(label("Adicionar repositório (URL Git ou pasta local)", muted=True))
@@ -303,18 +323,24 @@ class SourcesPage(Page):
         cfg = self.win.cfg()
         self.subtitle.setText(f"Repositórios vinculados. Os clones ficam em {tilde(paths.sources_dir())} "
                               "e se atualizam sozinhos.")
+        self.update_schedule(cfg)
         clear(self.list_box)
         with Store() as st:
             for s in cfg.sources:
                 state = st.get_state(s.name) or {}
-                self.list_box.addWidget(self._row(s, state, st.counts_by_kind(s.name)))
+                self.list_box.addWidget(self._row(s, state, st.counts_by_kind(s.name), overlay_base(cfg, s)))
         try:
             lines = paths.log_file().read_text("utf-8").splitlines()[-12:][::-1]
         except OSError:
             lines = []
         self.log.setPlainText("\n".join(f"› {line}" for line in lines) or "Nada por enquanto.")
 
-    def _row(self, s, state: dict, counts: dict) -> QFrame:
+    def update_schedule(self, cfg: config.Config | None = None) -> None:
+        text, level = schedule_text(cfg or self.win.cfg())
+        color = theme.SUN if level == "ok" else theme.WARN
+        self.schedule.setText(f'<span style="color:{color}">●</span>&nbsp; {html.escape(text)}')
+
+    def _row(self, s, state: dict, counts: dict, base=None) -> QFrame:
         box = QFrame()
         box.setProperty("card", True)
         lay = QHBoxLayout(box)
@@ -332,6 +358,9 @@ class SourcesPage(Page):
         url = label(breakable(s.location), wrap=True, select=True, mono=True, dim=True)
         url.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         left.addWidget(url)
+        if base is not None:
+            left.addWidget(label(f"Variação de “{base.name}”: mostra só o que a branch {s.branch or 'padrão'} tem de "
+                                 "diferente", wrap=True, tag="neutral"))
         left.addWidget(label(f"{counts_text(counts)}   ·   sync {ago(state.get('last_sync'))}", muted=True, wrap=True))
         if err:
             e = label(breakable(actions.first_line(err)), wrap=True, select=True, error=True)
@@ -619,24 +648,27 @@ class IntegrationsPage(Page):
         status = systemd.status()
         names = {"active": "ativo", "inactive": "inativo", "not-installed": "desligado",
                  "unavailable": "systemd indisponível"}
-        self.interval = QSpinBox()
-        self.interval.setRange(5, 1440)
-        self.interval.setSuffix(" min")
-        self.interval.setButtonSymbols(QSpinBox.NoButtons)
-        self.interval.setFixedWidth(90)
-        self.interval.setValue(cfg.settings.sync_interval_minutes)
+        self.interval = QLineEdit(str(cfg.settings.sync_interval_minutes))
+        self.interval.setValidator(QIntValidator(5, 1440, self.interval))
+        self.interval.setFixedWidth(80)
+        self.interval.setAlignment(Qt.AlignRight)
+        self.interval.setToolTip("De 5 a 1440 minutos")
+        self.interval.returnPressed.connect(lambda: self.timer(True))
         st_label = label(f"Status: <b>{names[status]}</b>")
+        widgets = [st_label, label("a cada", muted=True), self.interval, label("min", muted=True)]
         if status == "active":
             on = button("Aplicar", lambda: self.timer(True))
             off = button("Desligar", lambda: self.timer(False), ghost=True)
-            widgets = [st_label, label("a cada", muted=True), self.interval, on, off, None]
+            widgets += [on, off, None]
             self.win.register_action(on)
             self.win.register_action(off)
         else:
             on = button("Ligar", lambda: self.timer(True))
             self.win.register_action(on)
-            widgets = [st_label, label("a cada", muted=True), self.interval, on, None]
+            widgets += [on, None]
         lay.addLayout(row(*widgets))
+        text, level = schedule_text(cfg)
+        lay.addWidget(label(text, wrap=True, tag="ok" if level == "ok" else "warn"))
         lay.addWidget(label("Usa um timer do systemd do seu usuário: as fontes se atualizam mesmo com o app fechado.",
                             muted=True, wrap=True))
         self.content.addWidget(box)
@@ -694,7 +726,15 @@ class IntegrationsPage(Page):
                      busy=f"{'Registrando' if install else 'Removendo'} MCP em {c.label}…")
 
     def timer(self, enable: bool):
-        interval = self.interval.value()
+        try:
+            interval = int(self.interval.text())
+        except ValueError:
+            interval = 0
+        if enable and not 5 <= interval <= 1440:
+            self.win.show_message("Informe um intervalo entre 5 e 1440 minutos.", "warn")
+            self.interval.setFocus()
+            return
+        interval = interval or 30
 
         def work():
             cfg = config.load()
@@ -777,6 +817,9 @@ class MainWindow(QMainWindow):
         self._auto = QTimer(self, interval=60_000)
         self._auto.timeout.connect(self._auto_refresh)
         self._auto.start()
+        self._clock = QTimer(self, interval=30_000)
+        self._clock.timeout.connect(lambda: self.stack.currentWidget() is self.sources and self.sources.update_schedule())
+        self._clock.start()
 
         for key, _text, keys in self.NAV:
             QShortcut(QKeySequence(keys), self, activated=lambda k=key: self.go(k))

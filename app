@@ -24,8 +24,16 @@ _sunhub_app() {
     uv tool uninstall sunhub >/dev/null 2>&1 || true
   fi
 
-  # venv quebrado (Python do sistema mudou, pasta copiada de outra máquina): recria
-  if [ -d "$venv" ] && ! "$py" -c 'import sys' >/dev/null 2>&1; then rm -rf "$venv"; fi
+  # venv quebrado (Python do sistema mudou) ou pasta renomeada/movida: recria o ambiente.
+  # Os caminhos antigos ficam gravados no .venv; o `sunhub setup` depois reaponta atalho, MCP e timer.
+  if [ -d "$venv" ]; then
+    if ! "$py" -c 'import sys' >/dev/null 2>&1 \
+       || { [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" != "$root" ]; } \
+       || { [ ! -f "$marker" ] && ! "$py" -c 'import sunhub' >/dev/null 2>&1; }; then
+      printf "$say %s\n" "a pasta do app mudou de lugar; recriando o ambiente"
+      rm -rf "$venv"
+    fi
+  fi
 
   if [ ! -x "$py" ] || [ ! -f "$marker" ] || [ "$root/pyproject.toml" -nt "$marker" ] \
      || ! "$py" -c 'import sunhub, PySide6' >/dev/null 2>&1; then
@@ -43,7 +51,7 @@ _sunhub_app() {
       curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null || return 1
       uv venv -q --python python3 "$venv" && uv pip install -q --python "$py" -e "$root" || return 1
     fi
-    touch "$marker"
+    printf '%s' "$root" >"$marker"
     "$venv/bin/sunhub" setup --quiet || return 1
     printf "$good %s\n" "instalado: comando 'sunhub' no terminal e 'Sunhub' no menu de aplicativos"
   fi

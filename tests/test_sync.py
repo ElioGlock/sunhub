@@ -88,3 +88,41 @@ def test_links(knowledge_repo, tmp_path, env):
     assert linker.unlink_all() > 0
     assert not (env / ".copilot/skills/sunhub").exists()
     assert (own / "SKILL.md").exists()
+
+
+def test_branch_variation_only_indexes_differences(knowledge_repo, env):
+    from conftest import git
+
+    git(knowledge_repo, "checkout", "-q", "-b", "feature")
+    write(knowledge_repo, "skills/nova-skill/SKILL.md", "---\nname: nova-skill\ndescription: só na branch\n---\nOi\n")
+    write(knowledge_repo, "skills/nova-skill/references/extra.md", "# extra\n")
+    commit(knowledge_repo, "nova skill")
+    git(knowledge_repo, "checkout", "-q", "main")
+
+    url = f"file://{knowledge_repo}"
+    _add(url, "base")
+    cfg = config.load()
+    branch_src = config.source_from_location(cfg, url, "variacao", branch="feature")
+    with Store() as st:
+        r = sync.add_source(cfg, st, branch_src)
+        assert r.ok, r.error
+        assert "só diferenças" in r.detail
+        assert [d.ref_id for d in st.list(source="variacao")] == ["nova-skill"]  # nada duplicado
+        assert st.count(source="base") == 6
+        doc, others = resolver.resolve(st, "adr:14")
+        assert doc.source == "base" and not others
+    assert (env / ".copilot/skills/nova-skill/SKILL.md").exists()
+    assert (env / ".copilot/skills/api-standards").exists()  # continua vindo da base, sem prefixo
+
+    # main avança: a variação continua mostrando só o que é dela
+    write(knowledge_repo, "guidelines/nova.md", "# Nova guideline\n")
+    commit(knowledge_repo, "main avança")
+    with Store() as st:
+        sync.sync_all(config.load(), st)
+        assert [d.ref_id for d in st.list(source="variacao")] == ["nova-skill"]
+        assert st.count(source="base") == 7
+
+    # removendo a base, a variação passa a ter o conteúdo completo
+    with Store() as st:
+        sync.remove_source(config.load(), st, "base")
+        assert st.count(source="variacao") == 7

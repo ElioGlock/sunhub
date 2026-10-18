@@ -98,7 +98,7 @@ class Config:
         if self.get(src.name):
             raise ConfigError(f"já existe uma fonte chamada '{src.name}'")
         for s in self.sources:
-            same_url = src.url and _norm_url(s.url) == _norm_url(src.url) and (s.branch or None) == (src.branch or None)
+            same_url = src.url and norm_url(s.url) == norm_url(src.url) and (s.branch or None) == (src.branch or None)
             same_dir = src.local and s.local == src.local
             if same_url or same_dir:
                 raise ConfigError(f"isso já está vinculado como '{s.name}'")
@@ -118,7 +118,7 @@ class Config:
         return [s for s in self.sources if s.enabled]
 
 
-def _norm_url(url: str | None) -> str:
+def norm_url(url: str | None) -> str:
     return re.sub(r"(\.git)?/*$", "", (url or "").strip().lower())
 
 

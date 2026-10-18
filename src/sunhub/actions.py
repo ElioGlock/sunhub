@@ -65,6 +65,9 @@ def add_source(location: str, name: str | None = None, branch: str | None = None
     with Store() as st:
         r = sync_mod.add_source(cfg, st, src)
     if r and r.ok:
+        if "só diferenças" in r.detail:
+            return (f"{r.name}: mesma origem de outra fonte, então baixei só o que faltava e indexei só o que a "
+                    f"branch tem de diferente ({r.docs} documento(s))"), "ok"
         return f"{r.name}: {r.detail}, {r.docs} documentos", "ok"
     return f"{src.name} cadastrada, mas falhou: {first_line(r.error if r else '')}", "warn"
 
