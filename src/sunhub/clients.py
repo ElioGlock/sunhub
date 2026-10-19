@@ -8,13 +8,12 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sunhub import paths, runtime, state
+from sunhub import osutil, paths, runtime, state
 
 SERVER_NAME = "sunhub"
 
@@ -28,34 +27,41 @@ class Client:
     key: str
     label: str
     kind: str  # "json" | "claude-cli"
-    rel_file: str | None = None
+    file_fn: object = None  # () -> Path do arquivo de configuração (varia por sistema)
     root_key: str = "mcpServers"
     extra: dict = field(default_factory=dict)
-    detect_dirs: tuple[str, ...] = ()
+    detect_fn: object = None  # () -> list[Path] de pastas que indicam a ferramenta instalada
     detect_cmds: tuple[str, ...] = ()
 
     @property
     def file(self) -> Path | None:
-        return Path.home() / self.rel_file if self.rel_file else None
+        return self.file_fn() if self.file_fn else None
 
     @property
     def location(self) -> str:
-        return f"~/{self.rel_file}" if self.rel_file else "claude mcp add --scope user"
+        if not self.file_fn:
+            return "claude mcp add --scope user"
+        f, home = str(self.file), str(Path.home())
+        return "~" + f[len(home):] if f.startswith(home) else f
 
     def detected(self) -> bool:
-        return any((Path.home() / d).exists() for d in self.detect_dirs) or any(shutil.which(c) for c in self.detect_cmds)
+        dirs = self.detect_fn() if self.detect_fn else []
+        return any(d.exists() for d in dirs) or any(shutil.which(c) for c in self.detect_cmds)
 
 
+H = Path.home
 CLIENTS = [
-    Client("vscode", "VS Code (GitHub Copilot)", "json", ".config/Code/User/mcp.json", "servers", {"type": "stdio"},
-           (".config/Code",), ("code",)),
-    Client("vscode-insiders", "VS Code Insiders", "json", ".config/Code - Insiders/User/mcp.json", "servers",
-           {"type": "stdio"}, (".config/Code - Insiders",), ("code-insiders",)),
-    Client("copilot-cli", "GitHub Copilot CLI", "json", ".copilot/mcp-config.json", "mcpServers",
-           {"type": "local", "tools": ["*"]}, (), ("copilot",)),
-    Client("claude", "Claude Code", "claude-cli", None, detect_dirs=(".claude",), detect_cmds=("claude",)),
-    Client("cursor", "Cursor", "json", ".cursor/mcp.json", "mcpServers", {}, (".cursor",), ("cursor",)),
-    Client("gemini", "Gemini CLI", "json", ".gemini/settings.json", "mcpServers", {}, (".gemini",), ("gemini",)),
+    Client("vscode", "VS Code (GitHub Copilot)", "json", lambda: osutil.vscode_user_dir("Code") / "mcp.json", "servers",
+           {"type": "stdio"}, lambda: [osutil.vscode_user_dir("Code").parent], ("code",)),
+    Client("vscode-insiders", "VS Code Insiders", "json", lambda: osutil.vscode_user_dir("Code - Insiders") / "mcp.json",
+           "servers", {"type": "stdio"}, lambda: [osutil.vscode_user_dir("Code - Insiders").parent], ("code-insiders",)),
+    Client("copilot-cli", "GitHub Copilot CLI", "json", lambda: H() / ".copilot" / "mcp-config.json", "mcpServers",
+           {"type": "local", "tools": ["*"]}, None, ("copilot",)),
+    Client("claude", "Claude Code", "claude-cli", None, detect_fn=lambda: [H() / ".claude"], detect_cmds=("claude",)),
+    Client("cursor", "Cursor", "json", lambda: H() / ".cursor" / "mcp.json", "mcpServers", {},
+           lambda: [H() / ".cursor"], ("cursor",)),
+    Client("gemini", "Gemini CLI", "json", lambda: H() / ".gemini" / "settings.json", "mcpServers", {},
+           lambda: [H() / ".gemini"], ("gemini",)),
 ]
 
 
@@ -160,12 +166,13 @@ def install(c: Client) -> str:
         return f"{c.label}: servidor MCP registrado em {c.location}"
     if not shutil.which("claude"):
         raise ClientError("comando `claude` não encontrado no PATH")
-    subprocess.run(["claude", "mcp", "remove", "--scope", "user", SERVER_NAME], capture_output=True, text=True)
-    cmd = ["claude", "mcp", "add", "--scope", "user"]
+    claude = shutil.which("claude")
+    osutil.run([claude, "mcp", "remove", "--scope", "user", SERVER_NAME], capture_output=True, text=True)
+    cmd = [claude, "mcp", "add", "--scope", "user"]
     for k, v in (spec.get("env") or {}).items():
         cmd += ["-e", f"{k}={v}"]
     cmd += [SERVER_NAME, "--", spec["command"], *spec["args"]]
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = osutil.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         raise ClientError((p.stderr or p.stdout).strip() or "claude mcp add falhou")
     state.remember("mcp", {"client": c.key})
@@ -183,7 +190,8 @@ def uninstall(c: Client) -> str:
                 data[c.root_key] = servers
                 _write_json(f, data)
     elif shutil.which("claude"):
-        subprocess.run(["claude", "mcp", "remove", "--scope", "user", SERVER_NAME], capture_output=True, text=True)
+        osutil.run([shutil.which("claude"), "mcp", "remove", "--scope", "user", SERVER_NAME], capture_output=True,
+                   text=True)
     state.forget("mcp", {"client": c.key})
     return f"{c.label}: servidor MCP removido"
 

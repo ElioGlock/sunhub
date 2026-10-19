@@ -347,3 +347,21 @@ Decisões:
   o AppImage cobre "baixar e rodar".
 - **Notificações:** o timer (CLI) notifica pelo `notify-send`; o app mostra o contador em Atividade e na bandeja, sem
   duplicar a notificação.
+
+## 16. Windows
+
+| Peça | Linux | Windows |
+|---|---|---|
+| Instalação | `source app` (bash/zsh) | `app.cmd` → `app.ps1` (uv cria o venv e baixa o Python se faltar) |
+| Agendamento | `systemd.py` (timer do usuário) | `winsched.py` (Agendador de Tarefas via XML: oculto, sem console, no logon) |
+| Fachada | `scheduler.py` escolhe o backend pelo sistema | |
+| Links de skills | symlink | symlink (modo desenvolvedor) ou junction (`_winapi.CreateJunction`), removidos com `rmdir` |
+| Trava de sync | `fcntl.flock` | `msvcrt.locking` (`osutil.file_lock`) |
+| Comando `sunhub` | symlink em `~/.local/bin` | `sunhub.cmd` em `%LOCALAPPDATA%\Sunhub\bin` + PATH do usuário (HKCU) |
+| Atalho | `.desktop` | `Sunhub.lnk` no Menu Iniciar (WScript.Shell) + `.ico` |
+| Processos em segundo plano | `python -m sunhub` | `pythonw -m sunhub` / `Sunhub.exe` e `CREATE_NO_WINDOW` em todo subprocesso |
+| Notificação | `notify-send` | toast do Windows via PowerShell |
+| Empacotado | AppImage | PyInstaller: `Sunhub.exe` (sem console) + `sunhub-cli.exe` (MCP/terminal) |
+
+`osutil.py` concentra as diferenças; `runtime.self_command(background=…)` dá o comando certo para MCP (com console/stdio)
+e para agendador/atalho (sem console). A CI roda os testes em Ubuntu e Windows.

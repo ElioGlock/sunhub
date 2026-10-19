@@ -8,7 +8,7 @@ import sys
 from importlib import resources
 from pathlib import Path
 
-from sunhub import blocks, clients, config, linker, paths, runtime, state, systemd
+from sunhub import blocks, clients, config, linker, osutil, paths, runtime, scheduler, state
 from sunhub.store import Store
 
 DESKTOP_ID = "sunhub"
@@ -76,6 +76,49 @@ def link_cli() -> str | None:
     return str(link)
 
 
+def win_bin_dir() -> Path:
+    return osutil.localappdata() / "Sunhub" / "bin"
+
+
+def link_cli_windows() -> str:
+    """`sunhub` no terminal do Windows: um sunhub.cmd numa pasta nossa, adicionada ao PATH do usuário."""
+    d = win_bin_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    shim = d / "sunhub.cmd"
+    content = "@echo off\r\n" + subprocess.list2cmdline(runtime.self_command()) + " %*\r\n"
+    if not shim.exists() or shim.read_text("utf-8") != content:
+        shim.write_text(content, "utf-8", newline="")
+    _track_file(shim)
+    if osutil.windows_user_path_add(d):
+        state.remember("winpath", {"path": str(d)})
+    return str(shim)
+
+
+def _ps_quote(s: str) -> str:
+    return "'" + str(s).replace("'", "''") + "'"
+
+
+def install_launcher_windows() -> str:
+    """Atalho no Menu Iniciar (sem janela de console)."""
+    programs = osutil.appdata() / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    programs.mkdir(parents=True, exist_ok=True)
+    lnk = programs / "Sunhub.lnk"
+    ico = paths.state_dir() / "sunhub.ico"
+    ico.write_bytes(resources.files("sunhub.desktop").joinpath("sunhub.ico").read_bytes())
+    cmd = runtime.self_command(background=True)
+    ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut({_ps_quote(lnk)});"
+          f"$s.TargetPath={_ps_quote(cmd[0])};"
+          f"$s.Arguments={_ps_quote(subprocess.list2cmdline([*cmd[1:], 'app']))};"
+          f"$s.WorkingDirectory={_ps_quote(Path.home())};"
+          f"$s.IconLocation={_ps_quote(str(ico) + ',0')};"
+          "$s.Description='Skills, ADRs e guidelines para agentes de IA';$s.Save()")
+    osutil.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+               timeout=60)
+    for f in (lnk, ico):
+        _track_file(f)
+    return str(lnk)
+
+
 def install_launcher() -> str:
     """Atalho no menu de aplicativos (.desktop) + ícone."""
     apps = Path.home() / ".local" / "share" / "applications"
@@ -117,16 +160,16 @@ def refresh_integrations() -> list[str]:
             done.append(entry["client"])
         except clients.ClientError:
             pass
-    if systemd.status() not in ("not-installed",):
+    if scheduler.status() not in ("not-installed",):
         try:
             interval = config.load().settings.sync_interval_minutes
         except config.ConfigError:
             interval = config.Config().settings.sync_interval_minutes
-        if systemd.write_units(interval):  # caminho do Sunhub mudou: reativa
+        if scheduler.write_units(interval):  # caminho do Sunhub mudou: reativa
             try:
-                systemd.enable(interval)
+                scheduler.enable(interval)
                 done.append("timer")
-            except systemd.TimerError:
+            except scheduler.TimerError:
                 pass
     return done
 
@@ -140,9 +183,14 @@ def setup(launcher: bool = True) -> dict:
         linker.write_router_skill(cfg, store)
         if cfg.sources:
             linker.relink(cfg, store)  # religa skills para o local atual das fontes
-    info = {"home": str(paths.home()), "profiles": shell_env(), "cli": link_cli(),
-            "launcher": install_launcher() if launcher else None, "refreshed": refresh_integrations()}
-    return info
+    if osutil.IS_WINDOWS:
+        profiles, cli = [], link_cli_windows()
+        entry = install_launcher_windows() if launcher else None
+    else:
+        profiles, cli = shell_env(), link_cli()
+        entry = install_launcher() if launcher and not osutil.IS_MAC else None
+    return {"home": str(paths.home()), "profiles": profiles, "cli": cli, "launcher": entry,
+            "refreshed": refresh_integrations()}
 
 
 def init_project(project: Path, copilot: bool = True) -> list[str]:
@@ -167,14 +215,21 @@ def uninstall(purge: bool = False) -> list[str]:
             done.append(clients.uninstall(clients.get(entry["client"])))
         except clients.ClientError as e:
             done.append(str(e))
-    if systemd.status() != "not-installed":
-        done.append(systemd.disable())
+    if scheduler.status() != "not-installed":
+        done.append(scheduler.disable())
     for entry in list(state.load()["files"]):
         f = Path(entry["path"])
         if f.is_symlink() or f.is_file():
             f.unlink()
             done.append(f"removido {f}")
         state.forget("files", entry)
+    for entry in list(state.load()["winpath"]):
+        try:
+            if osutil.windows_user_path_remove(Path(entry["path"])):
+                done.append(f"{entry['path']} removido do PATH")
+        except OSError:
+            pass
+        state.forget("winpath", entry)
     for entry in list(state.load()["blocks"]):
         if blocks.remove(Path(entry["file"]), tuple(entry["markers"])):
             done.append(f"bloco removido de {entry['file']}")

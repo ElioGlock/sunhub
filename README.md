@@ -10,7 +10,7 @@ agente: → sun_get_adr("14")  → sun_get("skill:api-standards")  → sun_check
         "Implementei com paginação por cursor (ADR-014, accepted; substitui ADR-009) … Fontes: adrs@7be03d1"
 ```
 
-Linux · Python 3.10+ · git.
+Linux e Windows · Python 3.10+ (no Windows o instalador baixa) · git.
 
 ## Instalação e uso
 
@@ -30,10 +30,36 @@ dos repositórios e as ferramentas a integrar. Depois disso:
 `source app --install` só instala/atualiza, sem abrir. Funciona em bash e zsh, sem sudo. Para atualizar o app:
 `git pull` e `source app`. Para remover: `./uninstall.sh` (`--purge` apaga também `~/sunhub`).
 
-Requisitos: Linux com interface gráfica, Python 3.10+ e git. Se a janela não abrir no Ubuntu/Debian:
+Requisitos no Linux: interface gráfica, Python 3.10+ e git. Se a janela não abrir no Ubuntu/Debian:
 `sudo apt install libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0`.
 
-### Sem clonar: AppImage
+### Windows
+
+Precisa do **Git** (`winget install Git.Git`). O Python não precisa: o `app.cmd` baixa um se faltar.
+
+```powershell
+git clone https://github.com/<voce>/sunhub
+cd sunhub
+.\app.cmd            # ou duplo clique no app.cmd
+```
+
+Na primeira vez ele prepara tudo (sem administrador) e abre o app. Depois: **Sunhub** no Menu Iniciar, `sunhub` em
+terminais novos. `.\app.cmd --install` só instala/atualiza; `.\uninstall.cmd` desfaz (`--purge` apaga o hub).
+
+| No Windows | Como funciona |
+|---|---|
+| Atualização automática | Agendador de Tarefas (tarefa `\Sunhub\Sync`, oculta, sem console; também roda no logon) |
+| Skills nas ferramentas | symlink se o modo desenvolvedor estiver ligado; senão *junction* (não precisa de administrador) |
+| Comando `sunhub` | `sunhub.cmd` em `%LOCALAPPDATA%\Sunhub\bin`, adicionado ao PATH do usuário |
+| Atalho | Menu Iniciar (`Sunhub.lnk`) |
+| MCP | mesmos clientes; o VS Code fica em `%APPDATA%\Code\User\mcp.json` |
+| Notificações | notificação do Windows; ícone do sol na bandeja |
+
+Sem clonar: cada release traz **`Sunhub-<versão>-windows-x64.zip`**. Extraia numa pasta fixa (ex.:
+`%LOCALAPPDATA%\Programs\Sunhub`) e abra o `Sunhub.exe`. Na versão em .zip (e no AppImage) a busca por significado
+ainda não está disponível.
+
+### Sem clonar: AppImage (Linux)
 
 Cada versão publicada (tag `v*`) gera um **`Sunhub-<versão>-x86_64.AppImage`** na página de Releases do GitHub:
 um arquivo só, com Python, Qt e o Sunhub dentro. Baixe, dê permissão e abra:

@@ -5,13 +5,12 @@ Só remove o que está no manifesto (nunca toca em skills criadas à mão).
 """
 from __future__ import annotations
 
-import os
 import shutil
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from sunhub import paths, state
+from sunhub import osutil, paths, state
 from sunhub.config import Config
 from sunhub.store import Store
 
@@ -60,13 +59,14 @@ def desired_skills(cfg: Config, store: Store) -> dict[str, Path]:
 
 def _intact(lp: Path, dest: Path, mode: str) -> bool:
     if mode == "symlink":
-        return lp.is_symlink() and os.readlink(lp) == str(dest) and dest.is_dir()
+        target = osutil.link_target(lp)
+        return target is not None and osutil.same_path(target, dest) and dest.is_dir()
     return False  # cópias são sempre renovadas
 
 
 def _remove_owned(lp: Path, entry: dict) -> bool:
-    if lp.is_symlink():
-        lp.unlink()
+    if osutil.is_link(lp):
+        osutil.remove_link(lp)
         return True
     if entry.get("mode") == "copy" and lp.is_dir() and (lp / COPY_MARKER).exists():
         shutil.rmtree(lp)
@@ -80,7 +80,7 @@ def _materialize(lp: Path, dest: Path, mode: str) -> None:
         shutil.copytree(dest, lp, symlinks=False, ignore=shutil.ignore_patterns(".git"))
         (lp / COPY_MARKER).write_text(str(dest), "utf-8")
     else:
-        lp.symlink_to(dest, target_is_directory=True)
+        osutil.make_dir_link(lp, dest)
 
 
 def relink(cfg: Config, store: Store) -> LinkReport:
@@ -109,7 +109,7 @@ def relink(cfg: Config, store: Store) -> LinkReport:
         if e and e.get("dest") == str(dest) and e.get("mode") == mode and _intact(lp, dest, mode):
             entries.append(e)
             continue
-        if lp.is_symlink() or lp.exists():
+        if osutil.is_link(lp) or lp.exists():
             if not e or not _remove_owned(lp, e):
                 report.conflicts.append(p)  # existe algo do usuário com esse nome
                 continue

@@ -4,6 +4,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 
+from sunhub import osutil
+
 LABEL = {"skill": ("skill", "a"), "adr": ("ADR", "o"), "guideline": ("guideline", "a"),
          "antipattern": ("antipattern", "o"), "doc": ("documento", "o")}
 
@@ -43,7 +45,32 @@ def summarize(changes: list[dict], limit: int = 5) -> str | None:
     return "\n".join(lines)
 
 
+POWERSHELL_AUMID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
+
+
+def _send_windows(title: str, body: str) -> bool:
+    def q(s: str) -> str:
+        return "'" + s.replace("'", "''") + "'"
+
+    ps = (
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null;"
+        "$x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+        "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+        f"$t = $x.GetElementsByTagName('text'); $t.Item(0).AppendChild($x.CreateTextNode({q(title)})) | Out-Null;"
+        f"$t.Item(1).AppendChild($x.CreateTextNode({q(body)})) | Out-Null;"
+        f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier({q(POWERSHELL_AUMID)})"
+        ".Show([Windows.UI.Notifications.ToastNotification]::new($x))"
+    )
+    try:
+        p = osutil.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, timeout=15)
+        return p.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def send(title: str, body: str) -> bool:
+    if osutil.IS_WINDOWS:
+        return _send_windows(title, body)
     if not shutil.which("notify-send"):
         return False
     try:

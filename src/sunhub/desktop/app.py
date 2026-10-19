@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
-from sunhub import __version__, actions, clients, config, doctor, indexer, linker, notify, paths, runtime, systemd
+from sunhub import __version__, actions, clients, config, doctor, indexer, linker, notify, paths, runtime, scheduler
 from sunhub import lint as lint_mod
 from sunhub import search as search_mod
 from sunhub.sync import overlay_base
@@ -130,7 +130,7 @@ def schedule_text(cfg: config.Config) -> tuple[str, str]:
     """(texto curto, nível) da próxima verificação automática."""
     with Store() as st:
         last_sync = st.last_sync()
-    info = systemd.schedule(cfg.settings.sync_interval_minutes, last_sync)
+    info = scheduler.schedule(cfg.settings.sync_interval_minutes, last_sync)
     if info["status"] != "active":
         return "Atualização automática desligada (ative em Integrações)", "warn"
     every = f"a cada {cfg.settings.sync_interval_minutes} min"
@@ -248,9 +248,15 @@ class WizardPage(Page):
 
     def refresh(self):
         cfg = self.win.cfg()
+        from sunhub import git
+
         self.subtitle.setText(f"O Sunhub clona cada repositório em {tilde(paths.sources_dir())}, mantém tudo "
                               "atualizado sozinho e liga o conteúdo às suas ferramentas.")
-        self.timer.setText(f"Atualizar sozinho a cada {cfg.settings.sync_interval_minutes} min (systemd do usuário)")
+        if not git.available():
+            hint = "winget install Git.Git" if sys.platform == "win32" else "sudo apt install git"
+            self.win.show_message(f"O Git não está instalado, e o Sunhub precisa dele para baixar os repositórios. "
+                                  f"Instale ({hint}) e abra o Sunhub de novo.", "error")
+        self.timer.setText(f"Atualizar sozinho a cada {cfg.settings.sync_interval_minutes} min ({scheduler.NAME})")
         clear(self.targets_box)
         self.target_checks = {}
         for t in LINK_TARGETS:
@@ -735,9 +741,9 @@ class IntegrationsPage(Page):
         # timer
         box, lay = card()
         lay.addWidget(label("Atualização automática", h2=True))
-        status = systemd.status()
+        status = scheduler.status()
         names = {"active": "ativo", "inactive": "inativo", "not-installed": "desligado",
-                 "unavailable": "systemd indisponível"}
+                 "unavailable": f"{scheduler.NAME} indisponível"}
         self.interval = QLineEdit(str(cfg.settings.sync_interval_minutes))
         self.interval.setValidator(QIntValidator(1, 1440, self.interval))
         self.interval.setFixedWidth(80)
@@ -759,7 +765,7 @@ class IntegrationsPage(Page):
         lay.addLayout(row(*widgets))
         text, level = schedule_text(cfg)
         lay.addWidget(label(text, wrap=True, tag="ok" if level == "ok" else "warn"))
-        lay.addWidget(label("Usa um timer do systemd do seu usuário: as fontes se atualizam mesmo com o app fechado.",
+        lay.addWidget(label(f"Usa o {scheduler.NAME}: as fontes se atualizam mesmo com o app fechado.",
                             muted=True, wrap=True))
         self.content.addWidget(box)
 
@@ -878,7 +884,7 @@ class IntegrationsPage(Page):
             cfg = config.load()
             cfg.settings.sync_interval_minutes = interval
             config.save(cfg)
-            return (systemd.enable(interval) if enable else systemd.disable()), "ok"
+            return (scheduler.enable(interval) if enable else scheduler.disable()), "ok"
 
         self.win.run(work, busy="Configurando o timer…")
 
@@ -1222,6 +1228,13 @@ class MainWindow(QMainWindow):
 
 
 def create_app(argv: list[str] | None = None) -> QApplication:
+    if sys.platform == "win32":  # ícone e agrupamento próprios na barra de tarefas
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Sunhub.Sunhub")
+        except Exception:  # noqa: BLE001
+            pass
     QApplication.setApplicationName("Sunhub")
     QApplication.setOrganizationName("sunhub")
     QGuiApplication.setDesktopFileName("sunhub")  # liga a janela ao atalho/ícone do menu
@@ -1239,7 +1252,13 @@ def create_app(argv: list[str] | None = None) -> QApplication:
 
 
 def _server_name() -> str:
-    return f"sunhub-{os.getuid()}"
+    import getpass
+
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001
+        user = "user"
+    return f"sunhub-{user}"
 
 
 def _signal_ready() -> None:
@@ -1289,7 +1308,7 @@ def main() -> int:
         _signal_ready()
         return 0
     paths.ensure()
-    if runtime.appimage():  # AppImage: prepara o sistema (atalho, comando, caminhos) a cada abertura
+    if runtime.appimage() or runtime.is_frozen():  # empacotado: prepara atalho, comando e caminhos
         try:
             from sunhub import setup as setup_mod
 

@@ -11,11 +11,10 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import sys
 from array import array
 
-from sunhub import paths
+from sunhub import osutil, paths
 from sunhub.models import Document
 from sunhub.store import Store
 
@@ -66,11 +65,16 @@ def install() -> str:
     """Instala o fastembed no ambiente atual do Sunhub."""
     if installed():
         return "fastembed já instalado"
+    from sunhub import runtime
+
+    if runtime.is_frozen() or runtime.appimage():
+        raise RuntimeError("na versão empacotada (AppImage/.exe) a busca por significado ainda não está disponível; "
+                           "use a instalação pelo `source app` (Linux) ou `app.cmd` (Windows)")
     if shutil.which("uv"):
         cmd = ["uv", "pip", "install", "--python", sys.executable, "fastembed>=0.4"]
     else:
         cmd = [sys.executable, "-m", "pip", "install", "fastembed>=0.4"]
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = osutil.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError((p.stderr or p.stdout).strip().splitlines()[-1] if (p.stderr or p.stdout) else "falhou")
     importlib.invalidate_caches()

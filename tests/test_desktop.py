@@ -3,6 +3,8 @@ import os
 
 import pytest
 
+from sunhub import osutil
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
@@ -27,7 +29,7 @@ def test_wizard_to_sources_explore_integrations(knowledge_repo, env):
     app = create_app([])
     win = MainWindow()
     assert win.stack.currentWidget() is win.wizard
-    win.wizard.urls.setPlainText(f"file://{knowledge_repo}")
+    win.wizard.urls.setPlainText(knowledge_repo.as_uri())
     win.wizard.timer.setChecked(False)
     for cb in win.wizard.client_checks.values():
         cb.setChecked(False)
@@ -37,7 +39,7 @@ def test_wizard_to_sources_explore_integrations(knowledge_repo, env):
     assert not win.busy
     assert win.stack.currentWidget() is win.sources
     assert "1 fonte(s) vinculada(s)" in win.flash.text()
-    assert (env / ".copilot/skills/api-standards").is_symlink()
+    assert osutil.is_link(env / ".copilot/skills/api-standards")
 
     win.go("explore")
     win.explore.q.setText("cursor")
@@ -64,7 +66,7 @@ def test_activity_integrations_and_tray(knowledge_repo, env, monkeypatch):
     from sunhub import actions, config
 
     app = create_app([])
-    actions.add_source(f"file://{knowledge_repo}")
+    actions.add_source(knowledge_repo.as_uri())
     win = MainWindow()
     win.go("activity")
     assert win.stack.currentWidget() is win.activity

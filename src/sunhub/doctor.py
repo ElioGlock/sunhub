@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sunhub import clients, git, linker, paths, state, systemd
+from sunhub import clients, git, linker, paths, state, scheduler
 from sunhub.config import Config
 from sunhub.store import Store
 
@@ -63,11 +63,11 @@ def run(cfg: Config, store: Store) -> list[Check]:
             ok = clients.installed(c)
             add("ok" if ok else "warn", f"{c.label}: MCP {'registrado' if ok else 'não registrado (sunhub install-mcp ' + c.key + ')'}")
 
-    ts = systemd.status()
+    ts = scheduler.status()
     add("ok" if ts == "active" else "warn", {
         "active": f"sync automático ativo (a cada {cfg.settings.sync_interval_minutes} min)",
         "inactive": "timer instalado mas inativo (sunhub timer enable)",
         "not-installed": "sync automático desligado (sunhub timer enable)",
-        "unavailable": "systemd --user indisponível; use `sunhub sync` manualmente",
+        "unavailable": f"{scheduler.NAME} indisponível; use `sunhub sync` manualmente",
     }[ts])
     return out

@@ -3,9 +3,12 @@ import asyncio
 import json
 import zipfile
 
+import pytest
+
 from conftest import commit, git, write
 from typer.testing import CliRunner
 
+from sunhub import osutil
 from sunhub import clients, config, lint, mcp_server, notify, profile, resolver, setup, sync
 from sunhub import search as search_mod
 from sunhub.cli import app
@@ -25,7 +28,7 @@ def _sync():
 
 
 def test_changes_feed(knowledge_repo):
-    r = _add(f"file://{knowledge_repo}")
+    r = _add(knowledge_repo.as_uri())
     assert r.changes[0]["change"] == "source_added"
     (knowledge_repo / "adrs" / "0014-cursor-pagination.md").write_text(
         "# Paginação por cursor\n\nStatus: Superseded by ADR-020\n\nDecisão antiga.\n")
@@ -45,7 +48,7 @@ def test_changes_feed(knowledge_repo):
 
 
 def test_cheap_check_skips_fetch(knowledge_repo, monkeypatch):
-    _add(f"file://{knowledge_repo}")
+    _add(knowledge_repo.as_uri())
     from sunhub import git as gitmod
 
     calls = []
@@ -82,7 +85,7 @@ def test_lint(tmp_path):
 
 
 def test_project_profile(knowledge_repo, tmp_path, monkeypatch):
-    _add(f"file://{knowledge_repo}")
+    _add(knowledge_repo.as_uri())
     project = tmp_path / "meu-projeto"
     (project / "src").mkdir(parents=True)
     profile.write(project, ["outra-fonte"])
@@ -100,7 +103,7 @@ def test_semantic_pipeline(knowledge_repo, monkeypatch):
     cfg = config.load()
     cfg.settings.semantic = True
     config.save(cfg)
-    _add(f"file://{knowledge_repo}")
+    _add(knowledge_repo.as_uri())
     with Store() as st:
         assert len(st.vectors("hash-256")) == st.count()
         hits = search_mod.search(st, "classe concentra regras", limit=3)
@@ -115,7 +118,7 @@ def test_semantic_pipeline(knowledge_repo, monkeypatch):
 def test_propose_adr(knowledge_repo, tmp_path):
     bare = tmp_path / "remote.git"
     git(tmp_path, "clone", "-q", "--bare", str(knowledge_repo), str(bare))
-    _add(f"file://{bare}", "adrs")
+    _add(bare.as_uri(), "adrs")
     from sunhub import propose
 
     cfg = config.load()
@@ -131,7 +134,7 @@ def test_propose_adr(knowledge_repo, tmp_path):
 
 
 def test_usage_report(knowledge_repo):
-    _add(f"file://{knowledge_repo}")
+    _add(knowledge_repo.as_uri())
     asyncio.run(mcp_server.sun_get("adr:14"))
     asyncio.run(mcp_server.sun_get("adr:14"))
     asyncio.run(mcp_server.sun_search("kubernetes helm charts"))
@@ -181,6 +184,7 @@ def test_zip_export_with_html_and_pdf(tmp_path):
     assert res.detail == "em dia"
 
 
+@pytest.mark.skipif(osutil.IS_WINDOWS, reason="AppImage é do Linux")
 def test_appimage_runtime(tmp_path, monkeypatch, env):
     img = tmp_path / "Sunhub-x86_64.AppImage"
     img.write_text("#!/bin/sh\n")
@@ -194,12 +198,12 @@ def test_appimage_runtime(tmp_path, monkeypatch, env):
 
 
 def test_mcp_install_is_idempotent(env):
-    (env / ".config/Code").mkdir(parents=True)
+    osutil.vscode_user_dir().parent.mkdir(parents=True)
     c = clients.get("vscode")
     clients.install(c)
-    first = (env / ".config/Code/User/mcp.json").read_text()
+    first = (osutil.vscode_user_dir() / "mcp.json").read_text()
     assert "já registrado" in clients.install(c)
-    assert (env / ".config/Code/User/mcp.json").read_text() == first
-    assert not list((env / ".config/Code/User").glob("*.sunhub-bak-*"))
+    assert (osutil.vscode_user_dir() / "mcp.json").read_text() == first
+    assert not list(osutil.vscode_user_dir().glob("*.sunhub-bak-*"))
     assert json.loads(first)["servers"]["sunhub"]["args"][-1] == "mcp"
     assert resolver  # import usado

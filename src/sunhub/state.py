@@ -5,7 +5,7 @@ import json
 
 from sunhub import paths
 
-KEYS = ("links", "mcp", "blocks", "files")
+KEYS = ("links", "mcp", "blocks", "files", "winpath")
 
 
 def load() -> dict:

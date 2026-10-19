@@ -1,13 +1,15 @@
+import pytest
 import json
 
 from typer.testing import CliRunner
 
+from sunhub import osutil
 from sunhub import blocks, clients, mcp_server, setup
 from sunhub.cli import app
 
 
 def test_vscode_mcp_install_keeps_existing(env):
-    f = env / ".config/Code/User/mcp.json"
+    f = osutil.vscode_user_dir() / "mcp.json"
     f.parent.mkdir(parents=True)
     f.write_text('{\n  // comentário\n  "servers": {"outro": {"command": "x"}},\n}\n')
     c = clients.get("vscode")
@@ -22,6 +24,7 @@ def test_vscode_mcp_install_keeps_existing(env):
     assert set(json.loads(f.read_text())["servers"]) == {"outro"}
 
 
+@pytest.mark.skipif(osutil.IS_WINDOWS, reason="blocos de shell são do Linux/macOS")
 def test_blocks_and_uninstall(env):
     p = env / ".profile"
     p.write_text("export A=1\n")
@@ -35,7 +38,7 @@ def test_blocks_and_uninstall(env):
 
 def test_cli_flow(knowledge_repo):
     r = CliRunner()
-    res = r.invoke(app, ["add", f"file://{knowledge_repo}"])
+    res = r.invoke(app, ["add", knowledge_repo.as_uri()])
     assert res.exit_code == 0, res.output
     res = r.invoke(app, ["search", "cursor", "--kind", "adr"])
     assert "ADR-014" in res.output
@@ -50,7 +53,7 @@ def test_cli_flow(knowledge_repo):
 def test_mcp_tools(knowledge_repo):
     import asyncio
 
-    CliRunner().invoke(app, ["add", f"file://{knowledge_repo}"])
+    CliRunner().invoke(app, ["add", knowledge_repo.as_uri()])
     run = asyncio.run
     out = run(mcp_server.sun_get_adr("9"))
     assert "ADR-009" in out and "substituído por ADR-014" in out and "Toda API de listagem" in out

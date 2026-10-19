@@ -1,7 +1,7 @@
 """Operações compostas usadas pelo app de desktop (e reutilizáveis na CLI)."""
 from __future__ import annotations
 
-from sunhub import clients, config, systemd
+from sunhub import clients, config, scheduler
 from sunhub import setup as setup_mod
 from sunhub import sync as sync_mod
 from sunhub.config import LINK_TARGETS, ConfigError
@@ -49,8 +49,8 @@ def first_setup(urls: list[str], targets: list[str], client_keys: list[str], tim
             errors.append(first_line(str(e)))
     if timer:
         try:
-            systemd.enable(cfg.settings.sync_interval_minutes)
-        except systemd.TimerError as e:
+            scheduler.enable(cfg.settings.sync_interval_minutes)
+        except scheduler.TimerError as e:
             errors.append(f"timer: {first_line(str(e))}")
     ok_n = sum(1 for r in results if r.ok)
     msg = f"{ok_n} fonte(s) vinculada(s), {report.total if report else 0} link(s) de skills"

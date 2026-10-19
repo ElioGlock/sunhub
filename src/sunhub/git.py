@@ -6,6 +6,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from sunhub import osutil
+
 
 class GitError(RuntimeError):
     pass
@@ -26,7 +28,7 @@ def run(args: list[str], cwd: Path | str | None = None, timeout: int = 300) -> s
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"  # nunca travar pedindo senha
     try:
-        p = subprocess.run(
+        p = osutil.run(
             ["git", *args],
             cwd=cwd,
             capture_output=True,

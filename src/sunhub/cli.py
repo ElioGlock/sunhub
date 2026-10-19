@@ -4,7 +4,7 @@ from typing import List, NoReturn, Optional
 
 import typer
 
-from sunhub import __version__, clients, config, linker, paths, profile, resolver, systemd
+from sunhub import __version__, clients, config, linker, paths, profile, resolver, scheduler
 from sunhub import lint as lint_mod
 from sunhub import notify as notify_mod
 from sunhub import search as search_mod
@@ -25,7 +25,7 @@ app = typer.Typer(
     add_completion=False,
     pretty_exceptions_enable=False,
 )
-timer_app = typer.Typer(help="Sync automático (systemd --user).", no_args_is_help=True)
+timer_app = typer.Typer(help="Sync automático (systemd no Linux, Agendador de Tarefas no Windows).", no_args_is_help=True)
 app.add_typer(timer_app, name="timer")
 
 
@@ -93,8 +93,20 @@ def _version(value: bool) -> None:
         raise typer.Exit()
 
 
+def _set_home(value: Optional[str]) -> Optional[str]:
+    if value:
+        import os
+
+        os.environ["SUNHUB_HOME"] = value
+    return value
+
+
 @app.callback()
-def _root(version: bool = typer.Option(False, "--version", callback=_version, is_eager=True, help="Mostra a versão.")):
+def _root(
+    version: bool = typer.Option(False, "--version", callback=_version, is_eager=True, help="Mostra a versão."),
+    home: Optional[str] = typer.Option(None, "--home", callback=_set_home, is_eager=True,
+                                       help="Pasta do hub (padrão: ~/sunhub ou SUNHUB_HOME).", hidden=True),
+):
     pass
 
 
@@ -189,6 +201,10 @@ def sync(
 ):
     """git fetch/ff-only em cada fonte, reindexa o que mudou e religa as skills."""
     cfg = load_cfg()
+    if quiet:  # execução do agendador: nunca abrir diálogo de login do git
+        import os
+
+        os.environ["GCM_INTERACTIVE"] = "never"
     try:
         with Store() as st:
             results, report = sync_mod.sync_all(cfg, st, names=names or None, full=full, blocking=not quiet,
@@ -392,21 +408,21 @@ def timer_enable(interval: Optional[int] = typer.Option(None, "--interval", "-i"
         cfg.settings.sync_interval_minutes = max(1, interval)
         config.save(cfg)
     try:
-        ok(systemd.enable(cfg.settings.sync_interval_minutes))
-    except systemd.TimerError as e:
+        ok(scheduler.enable(cfg.settings.sync_interval_minutes))
+    except scheduler.TimerError as e:
         fail(str(e))
 
 
 @timer_app.command("disable")
 def timer_disable():
     """Desliga o sync automático."""
-    ok(systemd.disable())
+    ok(scheduler.disable())
 
 
 @timer_app.command("status")
 def timer_status():
     """Situação do timer."""
-    typer.echo(systemd.status())
+    typer.echo(scheduler.status())
 
 
 # ------------------------------------------------------------------ apps
@@ -580,7 +596,7 @@ def config_cmd(
     setattr(cfg.settings, key, new)
     config.save(cfg)
     ok(f"{key} = {new}")
-    if key == "sync_interval_minutes" and systemd.status() == "active":
+    if key == "sync_interval_minutes" and scheduler.status() == "active":
         typer.echo("  (rode `sunhub timer enable` para aplicar ao timer)")
 
 
@@ -588,8 +604,11 @@ def _launch_app() -> None:
     try:
         from sunhub.desktop.app import main as app_main
     except ImportError as e:
-        fail(f"não consegui carregar a interface ({e}).\n"
-             "  No Ubuntu/Debian: sudo apt install libegl1 libxkbcommon-x11-0 libxcb-cursor0")
+        from sunhub import osutil
+
+        hint = ("  Reinstale com: .\\app.cmd --install" if osutil.IS_WINDOWS
+                else "  No Ubuntu/Debian: sudo apt install libegl1 libxkbcommon-x11-0 libxcb-cursor0")
+        fail(f"não consegui carregar a interface ({e}).\n{hint}")
     raise typer.Exit(app_main())
 
 
@@ -629,6 +648,8 @@ def main() -> None:
     import os
     import sys
 
-    if len(sys.argv) == 1 and os.environ.get("APPIMAGE"):  # duplo clique no .AppImage abre o app
-        sys.argv.append("app")
+    from sunhub import runtime
+
+    if len(sys.argv) == 1 and (os.environ.get("APPIMAGE") or runtime.is_gui_exe()):
+        sys.argv.append("app")  # duplo clique no AppImage / Sunhub.exe abre o app
     app()

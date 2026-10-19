@@ -1,7 +1,6 @@
 """Clona/atualiza as fontes, reindexa, registra novidades e religa skills."""
 from __future__ import annotations
 
-import fcntl
 import shutil
 import zipfile
 from contextlib import contextmanager
@@ -10,7 +9,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Iterator
 
-from sunhub import config, git, indexer, linker, notify, paths
+from sunhub import config, git, indexer, linker, notify, osutil, paths
 from sunhub.config import Config, Source
 from sunhub.store import Store
 
@@ -38,17 +37,11 @@ class SyncResult:
 @contextmanager
 def sync_lock(blocking: bool = True) -> Iterator[None]:
     paths.ensure()
-    f = open(paths.state_dir() / "sync.lock", "w")
     try:
-        fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-    except BlockingIOError:
-        f.close()
-        raise SyncBusy("outro sync já está em andamento")
-    try:
-        yield
-    finally:
-        fcntl.flock(f, fcntl.LOCK_UN)
-        f.close()
+        with osutil.file_lock(paths.state_dir() / "sync.lock", blocking):
+            yield
+    except osutil.LockBusy:
+        raise SyncBusy("outro sync já está em andamento") from None
 
 
 # ------------------------------------------------------------------ variações de branch
@@ -115,7 +108,7 @@ def _extract_archive(src: Source, root: Path, store: Store) -> tuple[str, str, b
             for member in zf.infolist():
                 target = (tmp / member.filename).resolve()
                 is_link = (member.external_attr >> 16) & 0o170000 == 0o120000
-                if is_link or not str(target).startswith(str(base) + "/"):
+                if is_link or target == base or base not in target.parents:
                     continue  # ignora symlinks e caminhos que escapam da pasta (zip slip)
                 zf.extract(member, tmp)
     except zipfile.BadZipFile as e:

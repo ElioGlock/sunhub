@@ -13,8 +13,9 @@ from sunhub import paths, runtime
 UNIT = "sunhub-sync"
 
 
-class TimerError(RuntimeError):
-    pass
+from sunhub.errors import TimerError  # noqa: E402
+
+NAME = "systemd do usuário"
 
 
 def unit_dir() -> Path:
@@ -43,7 +44,7 @@ def write_units(interval_minutes: int) -> bool:
         "[Service]\n"
         "Type=oneshot\n"
         f"Environment=SUNHUB_HOME={paths.home()}\n"
-        f"ExecStart={runtime.shell_command('sync', '--quiet')}\n",
+        f"ExecStart={runtime.shell_command('sync', '--quiet', background=True)}\n",
         "utf-8",
     )
     timer.write_text(

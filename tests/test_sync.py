@@ -1,7 +1,7 @@
-import os
 
-from conftest import commit, write
+from conftest import commit, git, write
 
+from sunhub import osutil
 from sunhub import config, linker, resolver, sync
 from sunhub.store import Store
 
@@ -15,7 +15,7 @@ def _add(url, name=None):
 
 
 def test_clone_index_search_resolve(knowledge_repo):
-    cfg, src, r = _add(f"file://{knowledge_repo}")
+    cfg, src, r = _add(knowledge_repo.as_uri())
     assert r.ok, r.error
     assert src.name == "eng-knowledge" and r.docs == 6
     with Store() as st:
@@ -33,7 +33,7 @@ def test_clone_index_search_resolve(knowledge_repo):
 
 
 def test_incremental_update(knowledge_repo):
-    cfg, src, _ = _add(f"file://{knowledge_repo}")
+    cfg, src, _ = _add(knowledge_repo.as_uri())
     write(knowledge_repo, "adrs/0020-auth.md", "# Autenticação OIDC\n\nStatus: proposto\n")
     write(knowledge_repo, "guidelines/rest-naming.md", "# Nomenclatura REST v2\n\nkebab-case\n")
     (knowledge_repo / "antipatterns" / "god-object.md").unlink()
@@ -58,15 +58,15 @@ def test_local_folder_and_remove(knowledge_repo, tmp_path):
 
 
 def test_bad_url_reports_error(tmp_path):
-    cfg, src, r = _add(f"file://{tmp_path}/nao-existe")
+    cfg, src, r = _add((tmp_path / "nao-existe").as_uri())
     assert not r.ok and r.error
     assert config.load().get(src.name)  # fica cadastrada para corrigir
 
 
 def test_links(knowledge_repo, tmp_path, env):
-    cfg, _, _ = _add(f"file://{knowledge_repo}")
+    cfg, _, _ = _add(knowledge_repo.as_uri())
     link = env / ".copilot/skills/api-standards"
-    assert link.is_symlink() and (link / "SKILL.md").exists()
+    assert osutil.is_link(link) and (link / "SKILL.md").exists()
     assert (env / ".claude/skills/sunhub/SKILL.md").exists()  # skill roteadora
     # o usuário já tem uma skill própria com o mesmo nome em outra pasta: não mexer
     own = env / ".agents/skills/api-standards"
@@ -79,10 +79,10 @@ def test_links(knowledge_repo, tmp_path, env):
     # segunda fonte com skill de mesmo nome → nomes com prefixo
     other = tmp_path / "remote" / "other"
     other.mkdir()
-    os.system(f"cd {other} && git init -q -b main")
+    git(other, "init", "-q", "-b", "main")
     write(other, "skills/api-standards/SKILL.md", "---\nname: api-standards\ndescription: outra\n---\n")
     commit(other)
-    _add(f"file://{other}")
+    _add(other.as_uri())
     names = sorted(p.name for p in (env / ".copilot/skills").iterdir())
     assert names == ["eng-knowledge--api-standards", "other--api-standards", "sunhub"]
     assert linker.unlink_all() > 0
@@ -99,7 +99,7 @@ def test_branch_variation_only_indexes_differences(knowledge_repo, env):
     commit(knowledge_repo, "nova skill")
     git(knowledge_repo, "checkout", "-q", "main")
 
-    url = f"file://{knowledge_repo}"
+    url = knowledge_repo.as_uri()
     _add(url, "base")
     cfg = config.load()
     branch_src = config.source_from_location(cfg, url, "variacao", branch="feature")

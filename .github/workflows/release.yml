@@ -8,14 +8,33 @@ permissions:
   contents: write
 
 jobs:
-  appimage:
+  linux-appimage:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Gerar AppImage
         run: packaging/appimage/build.sh
-      - name: Publicar no release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: dist/*.AppImage
           generate_release_notes: true
+
+  windows-zip:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ".[app]" pyinstaller
+      - run: pyinstaller packaging/windows/sunhub.spec --noconfirm --distpath dist
+      - name: Teste rápido do executável
+        run: dist/Sunhub/sunhub-cli.exe --version
+      - name: Compactar
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          Compress-Archive -Path dist/Sunhub -DestinationPath "dist/Sunhub-$v-windows-x64.zip"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip

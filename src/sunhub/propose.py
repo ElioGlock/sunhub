@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
 
-from sunhub import git, indexer, paths
+from sunhub import git, indexer, osutil, paths
 from sunhub.config import Config, Source
 from sunhub.store import Store
 
@@ -176,7 +175,7 @@ def propose(cfg: Config, store: Store, title: str, context: str, decision: str, 
     if pushed:
         remote = git.run(["remote", "get-url", "origin"], cwd=repo)
         if shutil.which("gh"):
-            p = subprocess.run(["gh", "pr", "create", "--head", branch, "--base", base, "--title",
+            p = osutil.run(["gh", "pr", "create", "--head", branch, "--base", base, "--title",
                                 f"ADR-{number}: {title}", "--body",
                                 "Proposta de ADR criada pelo Sunhub a pedido do agente. Revise antes de aceitar."],
                                cwd=work, capture_output=True, text=True, timeout=120)
