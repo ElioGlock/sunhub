@@ -58,6 +58,9 @@ def run(cfg: Config, store: Store) -> list[Check]:
     add("error" if broken else "ok", f"{len(names)} skills publicadas em {targets or 'nenhuma pasta'}"
         + (f"; {len(broken)} links quebrados (rode sunhub link)" if broken else ""))
 
+    if "claude" in cfg.settings.link_targets and not clients.get("claude").detected():
+        add("warn", "skills publicadas em ~/.claude/skills, mas o Claude Code não foi encontrado "
+                    "(se não usa, rode: sunhub link --targets copilot)")
     for c in clients.CLIENTS:
         if c.detected() or clients.installed(c):
             ok = clients.installed(c)

@@ -177,7 +177,9 @@ def refresh_integrations() -> list[str]:
 def setup(launcher: bool = True) -> dict:
     paths.ensure()
     if not paths.config_file().exists():
-        config.save(config.Config())
+        fresh = config.Config()
+        fresh.settings.link_targets = clients.default_link_targets()
+        config.save(fresh)
     cfg = config.load()
     with Store() as store:
         linker.write_router_skill(cfg, store)

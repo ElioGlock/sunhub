@@ -12,6 +12,7 @@ def test_vscode_mcp_install_keeps_existing(env):
     f = osutil.vscode_user_dir() / "mcp.json"
     f.parent.mkdir(parents=True)
     f.write_text('{\n  // comentário\n  "servers": {"outro": {"command": "x"}},\n}\n', encoding="utf-8")
+    (f.parent.parent / "logs").mkdir()  # pasta que o próprio VS Code cria
     c = clients.get("vscode")
     assert c.detected()
     clients.install(c)

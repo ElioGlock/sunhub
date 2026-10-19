@@ -22,16 +22,30 @@ class ClientError(RuntimeError):
     pass
 
 
+def _tilde(p: Path) -> str:
+    s, h = str(p), str(Path.home())
+    return "~" + s[len(h):] if s.startswith(h) else s
+
+
 @dataclass
 class Client:
+    """Uma ferramenta que pode usar o servidor MCP do Sunhub.
+
+    Detecção conservadora: só conta como instalada com um sinal que a PRÓPRIA ferramenta cria
+    (o comando no PATH, um arquivo dela ou conteúdo dela na pasta). O que o Sunhub cria nessas pastas
+    (`skills/`, o arquivo de MCP) é ignorado, para o Sunhub não "detectar" a si mesmo.
+    """
+
     key: str
     label: str
     kind: str  # "json" | "claude-cli"
-    file_fn: object = None  # () -> Path do arquivo de configuração (varia por sistema)
+    file_fn: object = None  # () -> Path do arquivo de configuração MCP (varia por sistema)
     root_key: str = "mcpServers"
     extra: dict = field(default_factory=dict)
-    detect_fn: object = None  # () -> list[Path] de pastas que indicam a ferramenta instalada
-    detect_cmds: tuple[str, ...] = ()
+    dirs_fn: object = None  # () -> list[Path]: pastas da ferramenta
+    cmds: tuple[str, ...] = ()  # comandos da ferramenta no PATH
+    files_fn: object = None  # () -> list[Path]: arquivos que só a ferramenta cria
+    ignore: tuple[str, ...] = ()  # nomes dentro das pastas que o Sunhub pode ter criado
 
     @property
     def file(self) -> Path | None:
@@ -39,30 +53,65 @@ class Client:
 
     @property
     def location(self) -> str:
-        if not self.file_fn:
-            return "claude mcp add --scope user"
-        f, home = str(self.file), str(Path.home())
-        return "~" + f[len(home):] if f.startswith(home) else f
+        return _tilde(self.file) if self.file_fn else "claude mcp add --scope user"
+
+    def detection(self) -> str | None:
+        """Motivo pelo qual a ferramenta parece instalada, ou None."""
+        for c in self.cmds:
+            found = shutil.which(c)
+            if found:
+                return f"comando `{c}` encontrado em {_tilde(Path(found))}"
+        for f in self.files_fn() if self.files_fn else []:
+            if f.is_file():
+                return f"arquivo {_tilde(f)} encontrado"
+        for d in self.dirs_fn() if self.dirs_fn else []:
+            if d.is_dir():
+                try:
+                    own = sorted(e.name for e in d.iterdir() if e.name not in self.ignore)
+                except OSError:
+                    continue
+                if own:
+                    more = "…" if len(own) > 3 else ""
+                    return f"pasta {_tilde(d)} com {', '.join(own[:3])}{more}"
+        return None
 
     def detected(self) -> bool:
-        dirs = self.detect_fn() if self.detect_fn else []
-        return any(d.exists() for d in dirs) or any(shutil.which(c) for c in self.detect_cmds)
+        return self.detection() is not None
 
 
 H = Path.home
 CLIENTS = [
     Client("vscode", "VS Code (GitHub Copilot)", "json", lambda: osutil.vscode_user_dir("Code") / "mcp.json", "servers",
-           {"type": "stdio"}, lambda: [osutil.vscode_user_dir("Code").parent], ("code",)),
+           {"type": "stdio"}, dirs_fn=lambda: [osutil.vscode_user_dir("Code").parent], cmds=("code",),
+           ignore=("User",)),
     Client("vscode-insiders", "VS Code Insiders", "json", lambda: osutil.vscode_user_dir("Code - Insiders") / "mcp.json",
-           "servers", {"type": "stdio"}, lambda: [osutil.vscode_user_dir("Code - Insiders").parent], ("code-insiders",)),
+           "servers", {"type": "stdio"}, dirs_fn=lambda: [osutil.vscode_user_dir("Code - Insiders").parent],
+           cmds=("code-insiders",), ignore=("User",)),
     Client("copilot-cli", "GitHub Copilot CLI", "json", lambda: H() / ".copilot" / "mcp-config.json", "mcpServers",
-           {"type": "local", "tools": ["*"]}, None, ("copilot",)),
-    Client("claude", "Claude Code", "claude-cli", None, detect_fn=lambda: [H() / ".claude"], detect_cmds=("claude",)),
+           {"type": "local", "tools": ["*"]}, dirs_fn=lambda: [H() / ".copilot"], cmds=("copilot",),
+           ignore=("skills", "mcp-config.json")),
+    Client("claude", "Claude Code", "claude-cli", None, dirs_fn=lambda: [H() / ".claude"], cmds=("claude",),
+           files_fn=lambda: [H() / ".claude.json"], ignore=("skills",)),
     Client("cursor", "Cursor", "json", lambda: H() / ".cursor" / "mcp.json", "mcpServers", {},
-           lambda: [H() / ".cursor"], ("cursor",)),
+           dirs_fn=lambda: [H() / ".cursor"], cmds=("cursor",), ignore=("mcp.json", "skills")),
     Client("gemini", "Gemini CLI", "json", lambda: H() / ".gemini" / "settings.json", "mcpServers", {},
-           lambda: [H() / ".gemini"], ("gemini",)),
+           dirs_fn=lambda: [H() / ".gemini"], cmds=("gemini",), ignore=("settings.json", "skills")),
 ]
+
+
+def default_link_targets() -> list[str]:
+    """Pastas de skills a marcar numa instalação nova: Copilot sempre; Claude Code só se estiver instalado;
+    a pasta genérica ~/.agents só se já existir com conteúdo de outra ferramenta."""
+    targets = ["copilot"]
+    if get("claude").detected():
+        targets.append("claude")
+    agents = H() / ".agents"
+    try:
+        if agents.is_dir() and any(e.name != "skills" for e in agents.iterdir()):
+            targets.append("agents")
+    except OSError:
+        pass
+    return targets
 
 
 def get(key: str) -> Client:

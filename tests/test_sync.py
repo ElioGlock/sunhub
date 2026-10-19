@@ -64,6 +64,9 @@ def test_bad_url_reports_error(tmp_path):
 
 
 def test_links(knowledge_repo, tmp_path, env):
+    cfg = config.load()
+    cfg.settings.link_targets = ["copilot", "claude", "agents"]
+    config.save(cfg)
     cfg, _, _ = _add(knowledge_repo.as_uri())
     link = env / ".copilot/skills/api-standards"
     assert osutil.is_link(link) and (link / "SKILL.md").exists()

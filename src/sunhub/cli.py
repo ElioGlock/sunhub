@@ -327,9 +327,12 @@ def unlink():
 def clients_cmd():
     """Clientes MCP suportados, detectados e registrados."""
     for c in clients.CLIENTS:
-        det = typer.style("detectado", fg="green") if c.detected() else typer.style("não detectado", dim=True)
+        reason = c.detection()
+        det = typer.style("detectado", fg="green") if reason else typer.style("não detectado", dim=True)
         ins = typer.style("registrado", fg="green") if clients.installed(c) else "—"
         typer.echo(f"{c.key:<16} {c.label:<26} {det:<24} {ins}")
+        if reason:
+            typer.secho(f"{'':<16} motivo: {reason}", dim=True)
 
 
 @app.command("install-mcp")

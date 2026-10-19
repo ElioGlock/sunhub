@@ -79,7 +79,7 @@ class Source:
 @dataclass
 class Settings:
     sync_interval_minutes: int = 30
-    link_targets: list[str] = field(default_factory=lambda: list(LINK_TARGETS))
+    link_targets: list[str] = field(default_factory=lambda: ["copilot"])  # o setup acrescenta as detectadas
     link_mode: str = "symlink"
     gui_port: int = 8765
     notify: bool = True            # notificação do sistema quando um sync traz novidades

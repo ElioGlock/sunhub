@@ -155,6 +155,16 @@ def breakable(text: str) -> str:
     return text.replace("/", "/\u200b").replace("-", "-\u200b").replace("_", "_\u200b")
 
 
+def detection_tag(c) -> QLabel:
+    """Etiqueta "detectado"/"não detectado" com o motivo real no tooltip (para conferir, não confiar)."""
+    reason = c.detection()
+    t = tag("detectado", "ok") if reason else tag("não detectado")
+    t.setToolTip(f"Detectado porque: {reason}" if reason else
+                 "Nenhum sinal encontrado: comando no PATH, arquivo ou pasta da ferramenta.\n"
+                 "Pastas que o próprio Sunhub cria (skills, mcp.json) não contam.")
+    return t
+
+
 def display_ref(d: Document) -> str:
     return d.ref_id if d.kind == "adr" and d.ref_id else d.ref
 
@@ -259,9 +269,10 @@ class WizardPage(Page):
         self.timer.setText(f"Atualizar sozinho a cada {cfg.settings.sync_interval_minutes} min ({scheduler.NAME})")
         clear(self.targets_box)
         self.target_checks = {}
+        defaults = clients.default_link_targets()
         for t in LINK_TARGETS:
             cb = QCheckBox(f"~/{linker.TARGET_DIRS[t]}")
-            cb.setChecked(t == "copilot" or (Path.home() / linker.TARGET_DIRS[t]).parent.exists())
+            cb.setChecked(t in defaults)
             self.target_checks[t] = cb
             self.targets_box.addWidget(cb)
         clear(self.clients_box)
@@ -271,7 +282,7 @@ class WizardPage(Page):
             cb = QCheckBox(c.label)
             cb.setChecked(det)
             self.client_checks[c.key] = cb
-            self.clients_box.addLayout(row(cb, tag("detectado", "ok") if det else tag("não detectado"), None))
+            self.clients_box.addLayout(row(cb, detection_tag(c), None))
 
     def submit(self):
         urls = [u.strip() for u in self.urls.toPlainText().splitlines() if u.strip() and not u.strip().startswith("#")]
@@ -690,11 +701,18 @@ class IntegrationsPage(Page):
         lay.addWidget(label("Cada skill das fontes vira um link nestas pastas, junto com a skill “sunhub”, "
                             "que ensina o agente a consultar o hub.", muted=True, wrap=True))
         self.target_checks = {}
+        claude_found = clients.get("claude").detected()
         for t in LINK_TARGETS:
             cb = QCheckBox(f"~/{linker.TARGET_DIRS[t]}")
             cb.setChecked(t in cfg.settings.link_targets)
             self.target_checks[t] = cb
-            lay.addWidget(cb)
+            if t == "claude" and not claude_found and t in cfg.settings.link_targets:
+                warn = tag("Claude Code não encontrado", "warn")
+                warn.setToolTip("Nenhum comando `claude`, ~/.claude.json ou conteúdo do Claude Code em ~/.claude.\n"
+                                "Se você não usa o Claude Code, desmarque e clique em “Salvar e religar”.")
+                lay.addLayout(row(cb, warn, None))
+            else:
+                lay.addWidget(cb)
         self.mode = QComboBox()
         for m in LINK_MODES:
             self.mode.addItem("symlink (atualiza na hora)" if m == "symlink" else "cópia (ferramentas que não seguem symlink)", m)
@@ -722,8 +740,7 @@ class IntegrationsPage(Page):
             name = label(c.label)
             name.setStyleSheet("font-weight:600;")
             head = [name]
-            if detected:
-                head.append(tag("detectado", "ok"))
+            head.append(detection_tag(c))
             if installed:
                 head.append(tag("registrado", "ok"))
             info.addLayout(row(*head, None, spacing=8))
