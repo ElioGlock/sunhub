@@ -37,6 +37,7 @@ class Source:
     name: str
     url: str | None = None
     local: str | None = None
+    archive: str | None = None  # export .zip (Confluence, Notion...) extraído para o hub
     branch: str | None = None
     ref: str | None = None
     priority: int = 0
@@ -49,7 +50,11 @@ class Source:
 
     @property
     def location(self) -> str:
-        return self.url or self.local or ""
+        return self.url or self.local or self.archive or ""
+
+    @property
+    def kind(self) -> str:
+        return "git" if self.url else ("archive" if self.archive else "local")
 
     def checkout_dir(self) -> Path:
         if self.local:
@@ -58,7 +63,7 @@ class Source:
 
     def to_dict(self) -> dict:
         d: dict = {"name": self.name}
-        for key in ("url", "local", "branch", "ref"):
+        for key in ("url", "local", "archive", "branch", "ref"):
             value = getattr(self, key)
             if value:
                 d[key] = value
@@ -77,6 +82,10 @@ class Settings:
     link_targets: list[str] = field(default_factory=lambda: list(LINK_TARGETS))
     link_mode: str = "symlink"
     gui_port: int = 8765
+    notify: bool = True            # notificação do sistema quando um sync traz novidades
+    semantic: bool = False         # busca por significado (embeddings locais, baixa um modelo)
+    allow_proposals: bool = False  # o agente pode propor ADRs (cria branch e abre PR)
+    tray: bool = True              # app fica na bandeja ao fechar a janela
 
 
 @dataclass
@@ -99,7 +108,7 @@ class Config:
             raise ConfigError(f"já existe uma fonte chamada '{src.name}'")
         for s in self.sources:
             same_url = src.url and norm_url(s.url) == norm_url(src.url) and (s.branch or None) == (src.branch or None)
-            same_dir = src.local and s.local == src.local
+            same_dir = (src.local and s.local == src.local) or (src.archive and s.archive == src.archive)
             if same_url or same_dir:
                 raise ConfigError(f"isso já está vinculado como '{s.name}'")
         self.sources.append(src)
@@ -127,8 +136,8 @@ def validate_source(src: Source) -> None:
         raise ConfigError(f"nome inválido '{src.name}': use minúsculas, números, '.', '_' ou '-'")
     if src.name in RESERVED_NAMES:
         raise ConfigError(f"o nome '{src.name}' é reservado")
-    if bool(src.url) == bool(src.local):
-        raise ConfigError("informe uma URL Git ou uma pasta local (apenas um dos dois)")
+    if sum(bool(x) for x in (src.url, src.local, src.archive)) != 1:
+        raise ConfigError("informe uma URL Git, uma pasta local ou um arquivo .zip (apenas um)")
     for p in src.paths:
         if p.startswith("/") or ".." in Path(p).parts:
             raise ConfigError(f"caminho de sparse checkout inválido: {p}")
@@ -165,6 +174,9 @@ def source_from_location(
     if not location:
         raise ConfigError("informe a URL do repositório")
     local = Path(location).expanduser()
+    if not URL_RE.match(location) and local.is_file() and local.suffix.lower() == ".zip":
+        resolved = str(local.resolve())
+        return Source(name=name or unique_name(cfg, name_from_location(local.stem)), archive=resolved, priority=priority)
     if not URL_RE.match(location) and local.is_dir():
         resolved = str(local.resolve())
         return Source(name=name or unique_name(cfg, name_from_location(resolved)), local=resolved, priority=priority)

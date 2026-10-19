@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sunhub"
-version = "0.2.0"
+version = "0.3.0"
 description = "Hub local de conhecimento (skills, ADRs, guidelines, antipatterns) sincronizado de repositórios Git e exposto a agentes via MCP, CLI e GUI."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,10 +17,12 @@ dependencies = [
   "tomli>=2; python_version < '3.11'",
   "tomli-w>=1",
   "mcp>=1.2",
-  "PySide6-Essentials>=6.6",
+  "pypdf>=4",
 ]
 
 [project.optional-dependencies]
+app = ["PySide6-Essentials>=6.6"]          # app de desktop (o `source app` instala)
+semantic = ["fastembed>=0.4"]              # busca por significado (opcional, ~250 MB com o modelo)
 dev = ["pytest>=8"]
 
 [project.scripts]

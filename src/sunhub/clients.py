@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sunhub import paths, state
+from sunhub import paths, runtime, state
 
 SERVER_NAME = "sunhub"
 
@@ -67,7 +67,8 @@ def get(key: str) -> Client:
 
 
 def server_spec() -> dict:
-    spec: dict = {"command": sys.executable, "args": ["-m", "sunhub", "mcp"]}
+    cmd = runtime.self_command()
+    spec: dict = {"command": cmd[0], "args": [*cmd[1:], "mcp"]}
     if not paths.is_default_home():
         spec["env"] = {"SUNHUB_HOME": str(paths.home())}
     return spec
@@ -148,7 +149,11 @@ def install(c: Client) -> str:
         servers = data.get(c.root_key)
         if not isinstance(servers, dict):
             servers = {}
-        servers[SERVER_NAME] = {**c.extra, **spec}
+        entry = {**c.extra, **spec}
+        if servers.get(SERVER_NAME) == entry:  # já está igual: não reescreve (nem cria backup)
+            state.remember("mcp", {"client": c.key})
+            return f"{c.label}: servidor MCP já registrado em {c.location}"
+        servers[SERVER_NAME] = entry
         data[c.root_key] = servers
         _write_json(c.file, data)
         state.remember("mcp", {"client": c.key})

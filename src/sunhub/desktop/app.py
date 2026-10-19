@@ -8,7 +8,7 @@ from __future__ import annotations
 import html
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -16,12 +16,15 @@ from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl, Si
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QIntValidator, QKeySequence, QShortcut
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit,
-    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit,
+    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QSystemTrayIcon,
     QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
-from sunhub import __version__, actions, clients, config, doctor, indexer, linker, paths, systemd
+from sunhub import __version__, actions, clients, config, doctor, indexer, linker, notify, paths, runtime, systemd
+from sunhub import lint as lint_mod
+from sunhub import search as search_mod
 from sunhub.sync import overlay_base
 from sunhub.config import LINK_MODES, LINK_TARGETS, ConfigError
 from sunhub.desktop import theme
@@ -292,7 +295,7 @@ class SourcesPage(Page):
         self.body.addWidget(self.schedule)
 
         box, lay = card(10)
-        lay.addWidget(label("Adicionar repositório (URL Git ou pasta local)", muted=True))
+        lay.addWidget(label("Adicionar repositório (URL Git), pasta local ou export .zip", muted=True))
         self.url = QLineEdit()
         self.url.setProperty("mono", True)
         self.url.setPlaceholderText("https://github.com/acme/security-playbook")
@@ -305,6 +308,10 @@ class SourcesPage(Page):
         add_btn = button("Adicionar", self.add, primary=True)
         win.register_action(add_btn)
         lay.addLayout(row(self.url, self.branch, add_btn, stretch_at=0))
+        pick_dir = button("Pasta local…", self.pick_dir, ghost=True, tip="Indexa uma pasta do seu computador (sem clonar)")
+        pick_zip = button("Export .zip…", self.pick_zip, ghost=True,
+                          tip="Export do Confluence/Notion: HTML, Markdown e PDF são indexados")
+        lay.addLayout(row(label("ou", muted=True), pick_dir, pick_zip, None, spacing=8))
         self.body.addWidget(box)
 
         self.list_box = QVBoxLayout()
@@ -351,7 +358,8 @@ class SourcesPage(Page):
         left.setSpacing(4)
         err = state.get("last_error")
         color = theme.ERR if err else (theme.DIM if not s.enabled else theme.OK)
-        where = f"{s.branch or 'padrão'} @ {short(state.get('commit_sha'))}" if s.is_git else "pasta local"
+        where = {"git": f"{s.branch or 'padrão'} @ {short(state.get('commit_sha'))}", "archive": "export .zip",
+                 "local": "pasta local"}[s.kind]
         name = label(s.name)
         name.setStyleSheet("font-weight:600;")
         left.addLayout(row(dot(color), name, label(where, mono=True, muted=True), None, spacing=8))
@@ -373,6 +381,18 @@ class SourcesPage(Page):
             self.win.register_action(b)
             lay.addWidget(b, 0, Qt.AlignVCenter)
         return box
+
+    def pick_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "Escolher pasta de conhecimento", str(Path.home()))
+        if d:
+            self.url.setText(d)
+            self.branch.clear()
+
+    def pick_zip(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Escolher export .zip", str(Path.home()), "Arquivos .zip (*.zip)")
+        if f:
+            self.url.setText(f)
+            self.branch.clear()
 
     def add(self):
         url = self.url.text().strip()
@@ -489,7 +509,8 @@ class ExplorePage(Page):
         q, kind = self.q.text().strip(), self.kind()
         keep = self.current.uid if self.current else None
         with Store() as st:
-            items = st.search(q, kind, limit=80) if q else [(d, d.description or "") for d in st.list(kind, limit=500)]
+            items = (search_mod.search(st, q, kind, limit=80) if q
+                     else [(d, d.description or "") for d in st.list(kind, limit=500)])
         self.results.blockSignals(True)
         self.results.clear()
         select_row = 0
@@ -573,6 +594,74 @@ class ExplorePage(Page):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(src.checkout_dir() / self.current.path)))
 
 
+CHANGE_COLORS = {"added": theme.OK, "removed": theme.ERR, "status": theme.WARN, "source_added": theme.SUN}
+
+
+class ActivityPage(Page):
+    def __init__(self, win):
+        super().__init__(win)
+        self.header("Atividade", "O que mudou nas fontes e o que o agente tem consultado (últimos 30 dias).")
+        self.content = QVBoxLayout()
+        self.content.setSpacing(16)
+        self.body.addLayout(self.content)
+        self.body.addStretch(1)
+
+    def refresh(self):
+        clear(self.content)
+        since = datetime.now(timezone.utc) - timedelta(days=30)
+        with Store() as st:
+            rows = st.changes(since, limit=150)
+            rep = st.usage_report(30)
+
+        box, lay = card(4)
+        lay.addWidget(label("Novidades", h2=True))
+        if not rows:
+            lay.addWidget(label("Nada mudou nas fontes nos últimos 30 dias.", muted=True))
+        day = None
+        for c in rows:
+            dt = datetime.fromisoformat(c["ts"]).astimezone()
+            if dt.date() != day:
+                day = dt.date()
+                lay.addSpacing(8)
+                lay.addWidget(label("Hoje" if day == datetime.now().date() else dt.strftime("%d/%m/%Y"), muted=True))
+            text = label(notify.describe(c), wrap=True, select=True)
+            text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            lay.addLayout(row(dot(CHANGE_COLORS.get(c["change"], theme.DIM)), label(f"{dt:%H:%M}", mono=True, dim=True),
+                              text, tag(c["source"]), stretch_at=2, spacing=10))
+        self.content.addWidget(box)
+
+        box, lay = card(6)
+        lay.addLayout(row(label("Uso do agente", h2=True), label(f"{rep['total']} consulta(s)", muted=True), None))
+        if not rep["total"]:
+            lay.addWidget(label("O agente ainda não consultou o Sunhub. No VS Code, peça algo citando adr:14 ou uma "
+                                "skill e volte aqui.", muted=True, wrap=True))
+        else:
+            lay.addWidget(label(" · ".join(f"{k} {v}" for k, v in rep["by_tool"].items()), dim=True, wrap=True))
+            cols = QHBoxLayout()
+            cols.setSpacing(24)
+            for title, items, hint in (
+                ("Mais lidos", [f"{r['n']}×  {r['ref_id']} — {r['title']}" for r in rep["top"][:8]], ""),
+                ("Buscas sem resposta", [f"{r['n']}×  {r['query']}" for r in rep["gaps"][:8]],
+                 "Lacunas: documente ou proponha um ADR."),
+                ("Nunca lidos", [f"{r['ref_id']} — {r['title']}" for r in rep["unread"][:8]],
+                 f"{len(rep['unread'])} documento(s) sem leitura no período."),
+            ):
+                col = QVBoxLayout()
+                col.setSpacing(4)
+                col.addWidget(label(title, muted=True))
+                for it in items or ["—"]:
+                    lab = label(it, wrap=True, select=True)
+                    lab.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+                    col.addWidget(lab)
+                if hint:
+                    col.addWidget(label(hint, dim=True, wrap=True))
+                col.addStretch(1)
+                cols.addLayout(col, 1)
+            lay.addLayout(cols)
+        self.content.addWidget(box)
+        self.win.mark_changes_seen()
+
+
 class IntegrationsPage(Page):
     def __init__(self, win):
         super().__init__(win)
@@ -583,6 +672,7 @@ class IntegrationsPage(Page):
         self.body.addLayout(self.content)
         self.body.addStretch(1)
         self._checks = None
+        self._lint = None
 
     def refresh(self):
         clear(self.content)
@@ -649,10 +739,10 @@ class IntegrationsPage(Page):
         names = {"active": "ativo", "inactive": "inativo", "not-installed": "desligado",
                  "unavailable": "systemd indisponível"}
         self.interval = QLineEdit(str(cfg.settings.sync_interval_minutes))
-        self.interval.setValidator(QIntValidator(5, 1440, self.interval))
+        self.interval.setValidator(QIntValidator(1, 1440, self.interval))
         self.interval.setFixedWidth(80)
         self.interval.setAlignment(Qt.AlignRight)
-        self.interval.setToolTip("De 5 a 1440 minutos")
+        self.interval.setToolTip("De 1 a 1440 minutos")
         self.interval.returnPressed.connect(lambda: self.timer(True))
         st_label = label(f"Status: <b>{names[status]}</b>")
         widgets = [st_label, label("a cada", muted=True), self.interval, label("min", muted=True)]
@@ -671,6 +761,54 @@ class IntegrationsPage(Page):
         lay.addWidget(label(text, wrap=True, tag="ok" if level == "ok" else "warn"))
         lay.addWidget(label("Usa um timer do systemd do seu usuário: as fontes se atualizam mesmo com o app fechado.",
                             muted=True, wrap=True))
+        self.content.addWidget(box)
+
+        # recursos
+        box, lay = card(8)
+        lay.addWidget(label("Recursos", h2=True))
+        feats = (
+            ("notify", "Notificar novidades", "Notificação do sistema quando um sync automático traz ADR, skill ou "
+                                              "mudança de status."),
+            ("semantic", "Busca por significado", "Acha “como paginar uma lista” mesmo sem a palavra exata. Roda no seu "
+                                                  "PC; na primeira vez baixa um modelo de ~220 MB."),
+            ("allow_proposals", "O agente pode propor ADRs", "Quando nada cobre uma decisão, o agente cria o ADR numa "
+                                                             "branch e abre um PR para você revisar."),
+            ("tray", "Ficar na bandeja ao fechar", "A janela some, o Sunhub continua acessível pelo ícone do sol."),
+        )
+        for key, title, desc in feats:
+            cb = QCheckBox(title)
+            cb.setChecked(bool(getattr(cfg.settings, key)))
+            cb.toggled.connect(lambda on, k=key: self.set_feature(k, on))
+            self.win.register_action(cb)
+            lay.addWidget(cb)
+            d = label(desc, muted=True, wrap=True)
+            d.setContentsMargins(28, 0, 0, 6)
+            lay.addWidget(d)
+        self.content.addWidget(box)
+
+        # qualidade
+        box, lay = card(6)
+        lint_b = button("Verificar", self.run_lint)
+        self.win.register_action(lint_b)
+        lay.addLayout(row(label("Qualidade das fontes", h2=True), None, lint_b))
+        lay.addWidget(label("ADR sem status, ADR substituído por um que não existe, skill sem descrição, links "
+                            "quebrados. O mesmo que `sunhub lint`, que também roda na CI do repositório.",
+                            muted=True, wrap=True))
+        if self._lint is not None:
+            if not self._lint:
+                lay.addWidget(label("✓ nenhum problema encontrado", tag="ok"))
+            current = None
+            for i in sorted(self._lint, key=lambda x: (x.source, x.path, x.level)):
+                key = f"{i.source}/{i.path}"
+                if key != current:
+                    current = key
+                    lay.addSpacing(4)
+                    lay.addWidget(label(breakable(key), mono=True, muted=True, wrap=True))
+                color = theme.ERR if i.level == "error" else theme.WARN
+                msg = label(f'<span style="color:{color}">{i.sign}</span> {html.escape(i.message)}', wrap=True)
+                msg.setTextFormat(Qt.RichText)
+                msg.setContentsMargins(16, 0, 0, 0)
+                lay.addWidget(msg)
         self.content.addWidget(box)
 
         # doctor
@@ -730,8 +868,8 @@ class IntegrationsPage(Page):
             interval = int(self.interval.text())
         except ValueError:
             interval = 0
-        if enable and not 5 <= interval <= 1440:
-            self.win.show_message("Informe um intervalo entre 5 e 1440 minutos.", "warn")
+        if enable and not 1 <= interval <= 1440:
+            self.win.show_message("Informe um intervalo entre 1 e 1440 minutos.", "warn")
             self.interval.setFocus()
             return
         interval = interval or 30
@@ -743,6 +881,41 @@ class IntegrationsPage(Page):
             return (systemd.enable(interval) if enable else systemd.disable()), "ok"
 
         self.win.run(work, busy="Configurando o timer…")
+
+    def set_feature(self, key: str, on: bool):
+        def work():
+            if key == "semantic" and on:
+                from sunhub import semantic
+
+                semantic.install()
+                cfg = config.load()
+                cfg.settings.semantic = True
+                config.save(cfg)
+                with Store() as st:
+                    n = semantic.update_index(st, semantic.get_embedder())
+                return f"Busca por significado ligada ({n} documento(s) indexado(s))", "ok"
+            cfg = config.load()
+            setattr(cfg.settings, key, on)
+            config.save(cfg)
+            return f"{'Ligado' if on else 'Desligado'}: {key.replace('_', ' ')}", "ok"
+
+        busy = "Instalando a busca por significado e baixando o modelo…" if key == "semantic" and on else "Salvando…"
+        if not self.win.run(work, busy=busy):
+            self.refresh()
+
+    def run_lint(self):
+        def work():
+            cfg = config.load()
+            with Store() as st:
+                return lint_mod.lint_sources(cfg, st)
+
+        def done(issues):
+            self._lint = issues
+            e = sum(1 for i in issues if i.level == "error")
+            self.win.show_message(f"Qualidade: {e} erro(s), {len(issues) - e} aviso(s)", "warn" if issues else "ok")
+            self.refresh()
+
+        self.win.run(work, done, busy="Verificando as fontes…")
 
     def run_doctor(self):
         def work():
@@ -760,7 +933,8 @@ class IntegrationsPage(Page):
 # ------------------------------------------------------------------ janela
 
 class MainWindow(QMainWindow):
-    NAV = (("sources", "Fontes", "Ctrl+1"), ("explore", "Explorar", "Ctrl+2"), ("integrations", "Integrações", "Ctrl+3"))
+    NAV = (("sources", "Fontes", "Ctrl+1"), ("explore", "Explorar", "Ctrl+2"), ("activity", "Atividade", "Ctrl+3"),
+           ("integrations", "Integrações", "Ctrl+4"))
 
     def __init__(self):
         super().__init__()
@@ -798,9 +972,15 @@ class MainWindow(QMainWindow):
         self.wizard = WizardPage(self)
         self.sources = SourcesPage(self)
         self.explore = ExplorePage(self)
+        self.activity = ActivityPage(self)
         self.integrations = IntegrationsPage(self)
-        for p in (self.wizard, self.sources, self.explore, self.integrations):
+        for p in (self.wizard, self.sources, self.explore, self.activity, self.integrations):
             self.stack.addWidget(p)
+        with Store() as st:
+            self._seen_change = st.last_change_id()
+        self._quitting = False
+        self._tray_hint_shown = False
+        self._setup_tray()
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -883,8 +1063,63 @@ class MainWindow(QMainWindow):
         self.go(self.current_key)
 
     def _auto_refresh(self) -> None:
+        self._check_changes()
         if not self._busy and self.isActiveWindow() and self.stack.currentWidget() is self.sources:
             self.sources.refresh()
+
+    # ---------------------------------------------------------- novidades e bandeja
+    def _check_changes(self) -> None:
+        with Store() as st:
+            pending = st.changes(after_id=self._seen_change, limit=50)
+        b = self.nav["activity"]
+        b.setText(f"Atividade  ({len(pending)})" if pending else "Atividade")
+        if self.tray:
+            self.tray.setToolTip(f"Sunhub · {len(pending)} novidade(s)" if pending else "Sunhub")
+
+    def mark_changes_seen(self) -> None:
+        with Store() as st:
+            self._seen_change = st.last_change_id()
+        self._check_changes()
+
+    def _setup_tray(self) -> None:
+        self.tray = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray = QSystemTrayIcon(theme.app_icon(), self)
+        self.tray.setToolTip("Sunhub")
+        menu = QMenu(self)
+        menu.addAction("Abrir Sunhub", self.bring_to_front)
+        menu.addAction("Sincronizar agora", lambda: self.sources.sync_all())
+        self._tray_status = menu.addAction("")
+        self._tray_status.setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("Sair", self.quit_app)
+        menu.aboutToShow.connect(lambda: self._tray_status.setText(schedule_text(self.cfg())[0]))
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(
+            lambda reason: self.toggle_visible() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
+        self.tray.show()
+        QApplication.instance().setQuitOnLastWindowClosed(False)
+
+    def bring_to_front(self) -> None:
+        self.setWindowState((self.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.refresh_current()
+
+    def toggle_visible(self) -> None:
+        if self.isVisible() and self.isActiveWindow():
+            self.hide()
+        else:
+            self.bring_to_front()
+
+    def quit_app(self) -> None:
+        self._quitting = True
+        if self.close():
+            QApplication.instance().quit()
+        else:
+            self._quitting = False
 
     def _focus_search(self) -> None:
         self.go("explore")
@@ -967,12 +1202,23 @@ class MainWindow(QMainWindow):
         return True
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if not self._quitting and self.tray and self.cfg().settings.tray:
+            self.hide()
+            if not self._tray_hint_shown:
+                self._tray_hint_shown = True
+                self.tray.showMessage("Sunhub continua aberto", "Clique no sol na bandeja para voltar; "
+                                      "use “Sair” no menu para fechar de vez.", theme.app_icon(), 4000)
+            event.ignore()
+            return
         if self._busy:
             answer = QMessageBox.question(self, "Sair", "Uma operação ainda está em andamento. Sair mesmo assim?")
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
         event.accept()
+        if self.tray:  # com bandeja o app não fecha sozinho ao fechar a janela
+            self.tray.hide()
+            QTimer.singleShot(0, QApplication.instance().quit)
 
 
 def create_app(argv: list[str] | None = None) -> QApplication:
@@ -1043,6 +1289,13 @@ def main() -> int:
         _signal_ready()
         return 0
     paths.ensure()
+    if runtime.appimage():  # AppImage: prepara o sistema (atalho, comando, caminhos) a cada abertura
+        try:
+            from sunhub import setup as setup_mod
+
+            setup_mod.setup()
+        except Exception:  # noqa: BLE001 - nunca impede o app de abrir
+            pass
     win = MainWindow()
     win._server = _listen(win)
     win.show()

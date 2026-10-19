@@ -323,3 +323,27 @@ sem servidor HTTP e sem porta aberta.
   segundo plano. Reexecuções só abrem; mudanças no `pyproject.toml` disparam reinstalação. Instalações antigas via
   `uv tool` são migradas e as integrações (MCP, timer) são reapontadas para o novo Python.
 - Desinstalação: tudo que foi criado entra no manifesto (`files`, `links`, `mcp`, `blocks`) e `sunhub uninstall` remove.
+
+## 15. v0.3: novidades, qualidade, perfis, significado, propostas, AppImage
+
+| Módulo | Papel |
+|---|---|
+| `store.py` | + tabelas `changes` (novidades por sync), `usage` (consultas do agente), `vectors` (embeddings) |
+| `sync.py` | snapshot antes/depois de cada fonte → novidades; exports `.zip` (extração segura); notificação |
+| `git.py` | `ls-remote` antes do `fetch`: sem mudança, sem download |
+| `profile.py` | `.sunhub.toml` por projeto; MCP descobre o projeto por roots → `SUNHUB_PROJECT` → cwd |
+| `lint.py` | regras de qualidade para ADRs, skills e links; usado pela CLI, app e CI |
+| `semantic.py`, `search.py` | embeddings locais opcionais (fastembed) + fusão RRF com o FTS5 |
+| `propose.py` | ADR no formato do repositório, em `git worktree` separado, push + PR (`gh`) |
+| `formats.py` | HTML → Markdown e PDF → texto (pypdf) |
+| `runtime.py` | comando estável do próprio Sunhub (venv ou AppImage) para MCP, timer e atalho |
+| `packaging/appimage/` | Python portátil (python-build-standalone via uv) + Sunhub + Qt → AppImage |
+| `.github/workflows/` | CI (pytest com Qt offscreen) e release (AppImage anexado à tag) |
+
+Decisões:
+- **Escrita só com permissão:** `sun_propose_adr` é a única ferramenta que escreve e fica desligada até o usuário ligar.
+- **Qt e busca por significado como extras** (`[app]`, `[semantic]`): `pip install sunhub` puro serve para a CI (lint).
+- **Sem Flatpak:** o sandbox impediria escrever em `~/.copilot/skills`, `~/.config/Code` etc. sem permissões amplas;
+  o AppImage cobre "baixar e rodar".
+- **Notificações:** o timer (CLI) notifica pelo `notify-send`; o app mostra o contador em Atividade e na bandeja, sem
+  duplicar a notificação.

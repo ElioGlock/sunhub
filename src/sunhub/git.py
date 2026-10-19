@@ -112,16 +112,55 @@ def checkout(repo: Path, ref: str) -> None:
     run(["checkout", "--quiet", "--detach", ref], cwd=repo)
 
 
-def update(repo: Path, branch: str | None = None, ref: str | None = None) -> tuple[str, str]:
-    """fetch + avanço ff-only (nunca sobrescreve nada). Retorna (commit_antigo, commit_novo)."""
+def local_ref(repo: Path, ref: str) -> str | None:
+    try:
+        return run(["rev-parse", "--verify", "--quiet", ref], cwd=repo) or None
+    except GitError:
+        return None
+
+
+def remote_heads(repo: Path, branches: list[str]) -> dict[str, str]:
+    """Último commit de cada branch no remoto, sem baixar nada (`git ls-remote`)."""
+    out = run(["ls-remote", "--heads", "origin", *[f"refs/heads/{b}" for b in branches]], cwd=repo, timeout=60)
+    heads = {}
+    for line in out.splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref.startswith("refs/heads/"):
+            heads[ref[len("refs/heads/"):]] = sha
+    return heads
+
+
+def _target_branch(repo: Path, branch: str | None) -> str:
+    current = current_branch(repo)
+    target = branch or (current if current != "HEAD" else default_branch(repo))
+    if not target:
+        raise GitError("não consegui descobrir a branch; defina 'branch' na fonte")
+    return target
+
+
+def update(repo: Path, branch: str | None = None, ref: str | None = None,
+           also: list[str] | None = None) -> tuple[str, str, bool]:
+    """Atualiza o clone com segurança (fetch + avanço ff-only; nunca sobrescreve nada).
+
+    Antes, pergunta ao remoto só o último commit de cada branch (`ls-remote`, alguns bytes): se nada
+    mudou, nem faz o fetch. `also` são outras branches que precisam estar em dia (ex.: a base de uma
+    variação). Retorna (commit_antigo, commit_novo, baixou_algo).
+    """
     old = head(repo)
+    if not ref:
+        target = _target_branch(repo, branch)
+        names = [target, *[b for b in (also or []) if b and b != target]]
+        try:
+            heads = remote_heads(repo, names)
+            unchanged = all(heads.get(n) and heads[n] == local_ref(repo, f"refs/remotes/origin/{n}") for n in names)
+            if unchanged and heads[target] == old:
+                return old, old, False
+        except GitError:
+            pass  # sem ls-remote (proxy, servidor antigo): segue com o fetch normal
     run(["fetch", "--quiet", "--prune", "--tags", "origin"], cwd=repo, timeout=900)
     if ref:
         checkout(repo, ref)
     else:
-        target = branch or (current_branch(repo) if current_branch(repo) != "HEAD" else default_branch(repo))
-        if not target:
-            raise GitError("não consegui descobrir a branch; defina 'branch' na fonte")
         if current_branch(repo) != target:
             run(["checkout", "--quiet", target], cwd=repo)
         try:
@@ -129,7 +168,7 @@ def update(repo: Path, branch: str | None = None, ref: str | None = None) -> tup
         except GitError as e:
             raise GitError(f"{e}\n→ o clone gerenciado tem alterações locais; o Sunhub não sobrescreve. "
                            "Rode `sunhub remove` + `sunhub add` para clonar de novo.") from e
-    return old, head(repo)
+    return old, head(repo), True
 
 
 def changed_files(repo: Path, old: str, new: str) -> list[tuple[str, str, str | None]]:

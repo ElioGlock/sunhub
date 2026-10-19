@@ -58,3 +58,22 @@ def test_wizard_to_sources_explore_integrations(knowledge_repo, env):
     _wait(app)
     win.sources.remove.__func__  # existe
     win.close()
+
+
+def test_activity_integrations_and_tray(knowledge_repo, env, monkeypatch):
+    from sunhub import actions, config
+
+    app = create_app([])
+    actions.add_source(f"file://{knowledge_repo}")
+    win = MainWindow()
+    win.go("activity")
+    assert win.stack.currentWidget() is win.activity
+    win.go("integrations")
+    win.integrations.run_lint()
+    _wait(app)
+    assert win.integrations._lint is not None
+    # liga um recurso pela tela e confere que foi salvo
+    win.integrations.set_feature("notify", False)
+    _wait(app)
+    assert config.load().settings.notify is False
+    win.close()

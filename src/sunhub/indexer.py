@@ -14,6 +14,7 @@ from typing import Iterator
 
 import yaml
 
+from sunhub.formats import RICH_EXT, html_to_markdown, pdf_to_text
 from sunhub.models import KINDS, Document
 
 if sys.version_info >= (3, 11):
@@ -148,7 +149,7 @@ def classify(rel: str, overrides: Overrides | None = None) -> str | None:
         return None
     if p.name == SKILL_FILE:
         return "skill"
-    if p.suffix.lower() not in TEXT_EXT:
+    if p.suffix.lower() not in TEXT_EXT | RICH_EXT:
         return None
     forced = overrides.kind_for(rel)
     if forced:
@@ -203,14 +204,26 @@ def iter_files(root: Path) -> Iterator[Path]:
 
 def parse_document(root: Path, rel: str, source: str, kind: str, commit: str | None = None) -> Document | None:
     f = root / rel
-    try:
-        if f.stat().st_size > MAX_BYTES:
+    suffix = PurePosixPath(rel).suffix.lower()
+    rich_title = ""
+    if suffix == ".pdf":
+        res = pdf_to_text(f)
+        if not res or not res[1].strip():
             return None
-        raw = f.read_text("utf-8", errors="replace")
-    except OSError:
-        return None
-    if "\x00" in raw[:2048]:
-        return None
+        rich_title, raw = res
+    else:
+        try:
+            if f.stat().st_size > MAX_BYTES:
+                return None
+            raw = f.read_text("utf-8", errors="replace")
+        except OSError:
+            return None
+        if "\x00" in raw[:2048]:
+            return None
+        if suffix in (".html", ".htm"):
+            rich_title, raw = html_to_markdown(raw)
+            if not raw.strip():
+                return None
     fm, body = split_frontmatter(raw)
     p = PurePosixPath(rel)
     tags = _tags(fm.get("tags"))
@@ -222,7 +235,7 @@ def parse_document(root: Path, rel: str, source: str, kind: str, commit: str | N
                         ref_id=name, description=desc, tags=tags, commit_sha=commit)
 
     h1 = H1_RE.search(body)
-    title = str(fm.get("title") or (h1.group(1).strip() if h1 else _humanize(p.stem)))[:200]
+    title = str(fm.get("title") or rich_title or (h1.group(1).strip() if h1 else _humanize(p.stem)))[:200]
     head = body[:4000]
     extra: dict = {}
     status = normalize_status(fm.get("status"))

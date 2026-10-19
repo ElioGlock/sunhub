@@ -8,7 +8,7 @@ import sys
 from importlib import resources
 from pathlib import Path
 
-from sunhub import blocks, clients, config, linker, paths, state, systemd
+from sunhub import blocks, clients, config, linker, paths, runtime, state, systemd
 from sunhub.store import Store
 
 DESKTOP_ID = "sunhub"
@@ -45,21 +45,35 @@ def _track_file(path: Path) -> None:
 
 
 def link_cli() -> str | None:
-    """Garante `sunhub` em ~/.local/bin (symlink para o venv). Não mexe em um sunhub que não seja nosso."""
-    target = bin_dir() / "sunhub"
-    if not target.exists():
-        return None
+    """Garante `sunhub` em ~/.local/bin. Não mexe em um `sunhub` que não seja nosso."""
     link = Path.home() / ".local" / "bin" / "sunhub"
-    if link.is_symlink() or not link.exists():
-        if link.is_symlink() and os.readlink(link) == str(target):
-            return str(link)
-        link.parent.mkdir(parents=True, exist_ok=True)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    img = runtime.appimage()
+    ours = any(e["path"] == str(link) for e in state.load()["files"])
+    if img:
+        if link.exists() and not ours and not link.is_symlink():
+            return None
+        script = f'#!/bin/sh\nexec "{img}" "$@"\n'
         if link.is_symlink():
             link.unlink()
-        link.symlink_to(target)
+        if not (link.exists() and link.read_text("utf-8") == script):
+            link.write_text(script, "utf-8")
+            link.chmod(0o755)
         _track_file(link)
         return str(link)
-    return None
+    target = runtime.cli_entry()
+    if target is None:
+        return None
+    if link.is_symlink() and os.readlink(link) == str(target):
+        _track_file(link)
+        return str(link)
+    if link.exists() and not link.is_symlink() and not ours:
+        return None
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(target)
+    _track_file(link)
+    return str(link)
 
 
 def install_launcher() -> str:
@@ -71,7 +85,6 @@ def install_launcher() -> str:
     icon = icons / f"{DESKTOP_ID}.svg"
     icon.write_bytes(resources.files("sunhub.desktop").joinpath("sunhub.svg").read_bytes())
     entry = apps / f"{DESKTOP_ID}.desktop"
-    exe = bin_dir() / "sunhub"
     env = "" if paths.is_default_home() else f"env SUNHUB_HOME={paths.home()} "
     entry.write_text(
         "[Desktop Entry]\n"
@@ -79,7 +92,7 @@ def install_launcher() -> str:
         "Name=Sunhub\n"
         "GenericName=Hub de conhecimento para agentes\n"
         "Comment=Skills, ADRs, guidelines e antipatterns sincronizados para Copilot, Claude Code e outros\n"
-        f"Exec={env}{exe} app\n"
+        f"Exec={env}{runtime.shell_command('app')}\n"
         f"Icon={DESKTOP_ID}\n"
         "Terminal=false\n"
         "Categories=Development;Utility;\n"
@@ -106,11 +119,15 @@ def refresh_integrations() -> list[str]:
             pass
     if systemd.status() not in ("not-installed",):
         try:
-            cfg = config.load()
-            systemd.enable(cfg.settings.sync_interval_minutes)
-            done.append("timer")
-        except (systemd.TimerError, config.ConfigError):
-            systemd.write_units(config.Config().settings.sync_interval_minutes)
+            interval = config.load().settings.sync_interval_minutes
+        except config.ConfigError:
+            interval = config.Config().settings.sync_interval_minutes
+        if systemd.write_units(interval):  # caminho do Sunhub mudou: reativa
+            try:
+                systemd.enable(interval)
+                done.append("timer")
+            except systemd.TimerError:
+                pass
     return done
 
 

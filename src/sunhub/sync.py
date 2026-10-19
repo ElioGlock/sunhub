@@ -1,15 +1,16 @@
-"""Clona/atualiza as fontes, reindexa e religa skills."""
+"""Clona/atualiza as fontes, reindexa, registra novidades e religa skills."""
 from __future__ import annotations
 
 import fcntl
 import shutil
+import zipfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Iterator
 
-from sunhub import config, git, indexer, linker, paths
+from sunhub import config, git, indexer, linker, notify, paths
 from sunhub.config import Config, Source
 from sunhub.store import Store
 
@@ -31,6 +32,7 @@ class SyncResult:
     commit: str | None = None
     error: str | None = None
     detail: str = ""
+    changes: list[dict] = field(default_factory=list)
 
 
 @contextmanager
@@ -49,6 +51,8 @@ def sync_lock(blocking: bool = True) -> Iterator[None]:
         f.close()
 
 
+# ------------------------------------------------------------------ variações de branch
+
 def overlay_base(cfg: Config, src: Source) -> Source | None:
     """Outra fonte, cadastrada antes, do MESMO repositório em outra branch.
 
@@ -66,9 +70,13 @@ def overlay_base(cfg: Config, src: Source) -> Source | None:
     return None
 
 
-def _overlay_docs(src: Source, root, base: Source, commit: str | None):
+def _base_branch(root: Path, base: Source) -> str | None:
+    return base.branch or git.default_branch(root) or git.default_branch(base.checkout_dir())
+
+
+def _overlay_docs(src: Source, root: Path, base: Source, commit: str | None):
     """Documentos que a branch adicionou ou mudou desde que saiu da branch base."""
-    base_branch = base.branch or git.default_branch(root) or git.default_branch(base.checkout_dir())
+    base_branch = _base_branch(root, base)
     if not base_branch:
         return None
     try:
@@ -87,11 +95,70 @@ def _overlay_docs(src: Source, root, base: Source, commit: str | None):
     return indexer.index_paths(src.name, root, sorted(paths_), commit)
 
 
+# ------------------------------------------------------------------ exports .zip
+
+def _extract_archive(src: Source, root: Path, store: Store) -> tuple[str, str, bool]:
+    z = Path(src.archive).expanduser()
+    if not z.is_file():
+        raise SyncError(f"arquivo não encontrado: {z}")
+    st = z.stat()
+    marker = f"zip:{int(st.st_mtime)}:{st.st_size}"
+    prev = (store.get_state(src.name) or {}).get("commit_sha")
+    if prev == marker and root.is_dir():
+        return marker, "em dia", False
+    tmp = root.with_name(root.name + ".extraindo")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    base = tmp.resolve()
+    try:
+        with zipfile.ZipFile(z) as zf:
+            for member in zf.infolist():
+                target = (tmp / member.filename).resolve()
+                is_link = (member.external_attr >> 16) & 0o170000 == 0o120000
+                if is_link or not str(target).startswith(str(base) + "/"):
+                    continue  # ignora symlinks e caminhos que escapam da pasta (zip slip)
+                zf.extract(member, tmp)
+    except zipfile.BadZipFile as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise SyncError(f"{z.name} não é um .zip válido") from e
+    shutil.rmtree(root, ignore_errors=True)
+    tmp.rename(root)
+    return marker, "extraído", True
+
+
+# ------------------------------------------------------------------ novidades
+
+def _diff(source: str, before: dict, after: dict, commit: str | None) -> list[dict]:
+    short = (commit or "")[:12] or None
+    if not before:
+        return [{"source": source, "change": "source_added", "detail": f"{len(after)} documentos", "commit_sha": short}]
+    rows = []
+    for uid, a in after.items():
+        b = before.get(uid)
+        base = {"source": source, "uid": uid, "ref": a["ref"], "title": a["title"], "kind": a["kind"],
+                "commit_sha": short}
+        if b is None:
+            rows.append({**base, "change": "added"})
+        elif (b["status"] or None) != (a["status"] or None):
+            rows.append({**base, "change": "status", "detail": f"{b['status'] or '—'} → {a['status'] or '—'}"})
+        elif b["hash"] != a["hash"]:
+            rows.append({**base, "change": "modified"})
+    for uid, b in before.items():
+        if uid not in after:
+            rows.append({"source": source, "uid": uid, "ref": b["ref"], "title": b["title"], "kind": b["kind"],
+                         "change": "removed", "commit_sha": short})
+    return rows
+
+
+# ------------------------------------------------------------------ sync
+
 def sync_source(src: Source, store: Store, full: bool = False, base: Source | None = None) -> SyncResult:
     root = src.checkout_dir()
+    before = store.snapshot(src.name)
     try:
         commit = None
         old = new = None
+        fetched = True
         if src.is_git:
             if not (root / ".git").exists():
                 if root.exists() and any(root.iterdir()):
@@ -102,44 +169,59 @@ def sync_source(src: Source, store: Store, full: bool = False, base: Source | No
                 new = git.head(root)
                 detail = "clonado"
             else:
-                old, new = git.update(root, src.branch, src.ref)
-                detail = "atualizado" if old != new else "em dia"
+                also = [_base_branch(root, base)] if base else []
+                old, new, fetched = git.update(root, src.branch, src.ref, also=also)
+                detail = "atualizado" if old != new else ("em dia" if fetched else "em dia (nada a baixar)")
             commit = new
+            changed = old is None or old != new
+        elif src.archive:
+            commit, detail, changed = _extract_archive(src, root, store)
         else:
             if not root.is_dir():
                 raise SyncError(f"pasta local não encontrada: {root}")
-            detail = "pasta local reindexada"
+            detail, changed = "pasta local reindexada", True
 
-        if base:
+        if base and (changed or fetched or full or not before):
             docs = _overlay_docs(src, root, base, commit)
             if docs is not None:
                 store.replace_source(src.name, docs)
+                rows = _diff(src.name, before, store.snapshot(src.name), commit)
+                store.add_changes(rows)
                 store.set_state(src.name, commit, None)
-                return SyncResult(src.name, True, old is None or old != new, store.count(src.name), commit, None,
-                                  f"{detail}; só diferenças em relação a {base.name}")
+                return SyncResult(src.name, True, changed, store.count(src.name), commit, None,
+                                  f"{detail}; só diferenças em relação a {base.name}", rows)
+        elif base:
+            store.set_state(src.name, commit, None)
+            return SyncResult(src.name, True, False, store.count(src.name), commit, None,
+                              f"{detail}; só diferenças em relação a {base.name}")
 
-        changed = old is None or old != new
-        incremental = bool(src.is_git and old and new and old != new and not full and store.count(src.name) > 0)
+        incremental = bool(src.is_git and old and new and old != new and not full and before)
+        touched: set[str] = set()
         if incremental:
-            changes = git.changed_files(root, old, new)
-            touched = {p for _, a, b in changes for p in (a, b) if p}
+            touched = {p for _, a, b in git.changed_files(root, old, new) for p in (a, b) if p}
             if any(p == indexer.OVERRIDE_FILE or p.endswith(indexer.SKILL_FILE) for p in touched):
                 incremental = False
+        reindexed = True
         if incremental:
             store.delete_uids([f"{src.name}:{p}" for p in touched])
             store.upsert(indexer.index_paths(src.name, root, sorted(touched), commit))
             detail += f" ({len(touched)} arquivo(s))"
-        elif changed or full or store.count(src.name) == 0:
+        elif changed or full or not before:
             store.replace_source(src.name, indexer.index_source(src.name, root, commit))
+        else:
+            reindexed = False
+        rows = _diff(src.name, before, store.snapshot(src.name), commit) if reindexed else []
+        store.add_changes(rows)
         store.set_state(src.name, commit, None)
-        return SyncResult(src.name, True, changed, store.count(src.name), commit, None, detail)
+        return SyncResult(src.name, True, changed, store.count(src.name), commit, None, detail, rows)
     except (git.GitError, SyncError, OSError) as e:
         store.set_state(src.name, None, str(e))
         return SyncResult(src.name, False, False, store.count(src.name), None, str(e), "falhou")
 
 
 def sync_all(cfg: Config, store: Store, names: list[str] | None = None, full: bool = False,
-             relink: bool = True, blocking: bool = True) -> tuple[list[SyncResult], "linker.LinkReport | None"]:
+             relink: bool = True, blocking: bool = True,
+             notify_user: bool = False) -> tuple[list[SyncResult], "linker.LinkReport | None"]:
     if names:
         for n in names:
             cfg.require(n)
@@ -149,8 +231,26 @@ def sync_all(cfg: Config, store: Store, names: list[str] | None = None, full: bo
         chosen.sort(key=lambda s: bases[s.name] is not None)  # bases antes das variações
         results = [sync_source(s, store, full, bases[s.name]) for s in chosen]
         report = linker.relink(cfg, store) if relink else None
+        if cfg.settings.semantic:
+            _update_vectors(store)
         _log(results)
+    if notify_user and cfg.settings.notify:
+        rows = [c for r in results for c in r.changes if c["change"] != "source_added"]
+        body = notify.summarize(rows)
+        if body:
+            notify.send("Sunhub: novidades nas suas fontes", body)
     return results, report
+
+
+def _update_vectors(store: Store) -> None:
+    try:
+        from sunhub import semantic
+
+        emb = semantic.get_embedder()
+        if emb:
+            semantic.update_index(store, emb)
+    except Exception as e:  # noqa: BLE001 - busca por significado nunca derruba o sync
+        _log_line(f"busca por significado: não atualizou os vetores ({e})")
 
 
 def add_source(cfg: Config, store: Store, src: Source, sync: bool = True) -> SyncResult | None:
@@ -167,10 +267,10 @@ def remove_source(cfg: Config, store: Store, name: str) -> Source:
     src = cfg.remove(name)
     config.save(cfg)
     store.delete_source(name)
-    if src.is_git:
+    if not src.local:
         root = src.checkout_dir().resolve()
         base = paths.sources_dir().resolve()
-        if root.parent == base and root.exists():  # só apaga clones gerenciados
+        if root.parent == base and root.exists():  # só apaga o que o Sunhub criou
             shutil.rmtree(root)
     if dependents:  # variações que dependiam desta fonte passam a ter o conteúdo completo
         sync_all(cfg, store, names=dependents, full=True)
@@ -179,14 +279,19 @@ def remove_source(cfg: Config, store: Store, name: str) -> Source:
     return src
 
 
-def _log(results: list[SyncResult]) -> None:
+def _log_line(text: str) -> None:
     try:
         with open(paths.log_file(), "a", encoding="utf-8") as f:
-            stamp = datetime.now().isoformat(timespec="seconds")
-            for r in results:
-                line = f"{stamp} {r.name}: {'ok' if r.ok else 'ERRO'} {r.detail} docs={r.docs}"
-                if r.error:
-                    line += " " + r.error.replace("\n", " | ")
-                f.write(line + "\n")
+            f.write(f"{datetime.now().isoformat(timespec='seconds')} {text}\n")
     except OSError:
         pass
+
+
+def _log(results: list[SyncResult]) -> None:
+    for r in results:
+        line = f"{r.name}: {'ok' if r.ok else 'ERRO'} {r.detail} docs={r.docs}"
+        if r.changes:
+            line += f" novidades={len(r.changes)}"
+        if r.error:
+            line += " " + r.error.replace("\n", " | ")
+        _log_line(line)

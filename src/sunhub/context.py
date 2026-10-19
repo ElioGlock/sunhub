@@ -2,19 +2,20 @@
 from __future__ import annotations
 
 from sunhub import resolver
+from sunhub import search as search_mod
 from sunhub.render import header
 from sunhub.store import Store
 
 
 def build(store: Store, task: str = "", refs: list[str] | None = None, priorities: dict | None = None,
-          per_kind: int = 3) -> tuple[str, list[str]]:
+          per_kind: int = 3, sources: list[str] | None = None) -> tuple[str, list[str]]:
     parts = ["# Contexto do Sunhub", ""]
     if task:
         parts += [f"Tarefa: {task}", ""]
     missing: list[str] = []
     seen: set[str] = set()
     for ref in refs or []:
-        doc, _ = resolver.resolve(store, ref, priorities)
+        doc, _ = resolver.resolve(store, ref, priorities, sources)
         if not doc:
             missing.append(ref)
             continue
@@ -23,7 +24,7 @@ def build(store: Store, task: str = "", refs: list[str] | None = None, prioritie
     if task:
         for kind, label in (("adr", "ADRs relacionados"), ("guideline", "Guidelines relacionadas"),
                             ("antipattern", "Antipatterns a evitar")):
-            hits = [(d, s) for d, s in store.search(task, kind=kind, limit=per_kind + len(seen)) if d.uid not in seen]
+            hits = [(d, s) for d, s in search_mod.search(store, task, kind=kind, limit=per_kind + len(seen), sources=sources) if d.uid not in seen]
             if hits:
                 parts.append(f"## {label}")
                 for d, s in hits[:per_kind]:

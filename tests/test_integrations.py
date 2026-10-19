@@ -48,11 +48,16 @@ def test_cli_flow(knowledge_repo):
 
 
 def test_mcp_tools(knowledge_repo):
+    import asyncio
+
     CliRunner().invoke(app, ["add", f"file://{knowledge_repo}"])
-    out = mcp_server.sun_get_adr("9")
+    run = asyncio.run
+    out = run(mcp_server.sun_get_adr("9"))
     assert "ADR-009" in out and "substituído por ADR-014" in out and "Toda API de listagem" in out
-    assert "<sunhub-document" in mcp_server.sun_get("skill:api-standards")
-    assert "ADR-014" in mcp_server.sun_search("paginação", kind="adr")
-    assert "God object" in mcp_server.sun_check_antipatterns("classe de serviço com regras demais")
-    assert "eng-knowledge" in mcp_server.sun_status()
-    assert "não encontrada" in mcp_server.sun_get("adr:999")
+    assert "<sunhub-document" in run(mcp_server.sun_get("skill:api-standards"))
+    assert "ADR-014" in run(mcp_server.sun_search("paginação", kind="adr"))
+    assert "God object" in run(mcp_server.sun_check_antipatterns("classe de serviço com regras demais"))
+    assert "eng-knowledge" in run(mcp_server.sun_status())
+    assert "não encontrada" in run(mcp_server.sun_get("adr:999"))
+    assert "fonte eng-knowledge vinculada" in run(mcp_server.sun_changes(7))
+    assert "desligado" in run(mcp_server.sun_propose_adr("Usar Kafka", "c", "d", "e"))

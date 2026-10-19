@@ -40,16 +40,16 @@ _sunhub_app() {
     printf "$say %s\n" "preparando o Sunhub (só na primeira vez; baixa ~100 MB)…"
     if command -v uv >/dev/null 2>&1; then
       [ -x "$py" ] || uv venv -q --python python3 "$venv" || return 1
-      uv pip install -q --python "$py" -e "$root" || return 1
+      uv pip install -q --python "$py" -e "${root}[app]" || return 1
     elif python3 -m venv "$venv" >/dev/null 2>&1 && [ -x "$venv/bin/pip" ]; then
       "$venv/bin/pip" install -q --upgrade pip >/dev/null 2>&1 || true
-      "$venv/bin/pip" install -q -e "$root" || return 1
+      "$venv/bin/pip" install -q -e "${root}[app]" || return 1
     else
       rm -rf "$venv"
       printf "$say %s\n" "python3-venv indisponível; instalando o uv em ~/.local/bin"
       command -v curl >/dev/null 2>&1 || { printf "$bad %s\n" "curl não encontrado. Instale: sudo apt install curl"; return 1; }
       curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null || return 1
-      uv venv -q --python python3 "$venv" && uv pip install -q --python "$py" -e "$root" || return 1
+      uv venv -q --python python3 "$venv" && uv pip install -q --python "$py" -e "${root}[app]" || return 1
     fi
     printf '%s' "$root" >"$marker"
     "$venv/bin/sunhub" setup --quiet || return 1

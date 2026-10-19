@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sunhub import paths
+from sunhub import paths, runtime
 
 UNIT = "sunhub-sync"
 
@@ -29,11 +29,13 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
 
 
-def write_units(interval_minutes: int) -> tuple[Path, Path]:
+def write_units(interval_minutes: int) -> bool:
+    """Escreve as units; retorna True se algo mudou."""
     d = unit_dir()
     d.mkdir(parents=True, exist_ok=True)
     service = d / f"{UNIT}.service"
     timer = d / f"{UNIT}.timer"
+    before = (service.read_text("utf-8") if service.exists() else "", timer.read_text("utf-8") if timer.exists() else "")
     service.write_text(
         "[Unit]\n"
         "Description=Sunhub: sincroniza os repositórios de conhecimento\n"
@@ -41,7 +43,7 @@ def write_units(interval_minutes: int) -> tuple[Path, Path]:
         "[Service]\n"
         "Type=oneshot\n"
         f"Environment=SUNHUB_HOME={paths.home()}\n"
-        f"ExecStart={sys.executable} -m sunhub sync --quiet\n",
+        f"ExecStart={runtime.shell_command('sync', '--quiet')}\n",
         "utf-8",
     )
     timer.write_text(
@@ -49,20 +51,20 @@ def write_units(interval_minutes: int) -> tuple[Path, Path]:
         "Description=Sunhub: sync periódico\n\n"
         "[Timer]\n"
         "OnBootSec=2min\n"
-        f"OnUnitActiveSec={max(5, int(interval_minutes))}min\n"
+        f"OnUnitActiveSec={max(1, int(interval_minutes))}min\n"
         "RandomizedDelaySec=60\n\n"
         "[Install]\n"
         "WantedBy=timers.target\n",
         "utf-8",
     )
-    return service, timer
+    return before != (service.read_text("utf-8"), timer.read_text("utf-8"))
 
 
 def enable(interval_minutes: int) -> str:
     write_units(interval_minutes)
     if not available():
         raise TimerError("systemctl não encontrado; as units foram escritas, mas não ativadas")
-    for args in (("daemon-reload",), ("enable", "--now", f"{UNIT}.timer")):
+    for args in (("daemon-reload",), ("enable", "--now", f"{UNIT}.timer"), ("restart", f"{UNIT}.timer")):
         p = _systemctl(*args)
         if p.returncode != 0:
             err = (p.stderr or p.stdout).strip() or "systemctl falhou"

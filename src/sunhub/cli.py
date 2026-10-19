@@ -4,7 +4,10 @@ from typing import List, NoReturn, Optional
 
 import typer
 
-from sunhub import __version__, clients, config, linker, paths, resolver, systemd
+from sunhub import __version__, clients, config, linker, paths, profile, resolver, systemd
+from sunhub import lint as lint_mod
+from sunhub import notify as notify_mod
+from sunhub import search as search_mod
 from sunhub import context as context_mod
 from sunhub import doctor as doctor_mod
 from sunhub import setup as setup_mod
@@ -44,6 +47,20 @@ def load_cfg() -> config.Config:
         return config.load()
     except ConfigError as e:
         fail(str(e))
+
+
+def _scope(cfg: config.Config, everything: bool) -> Optional[List[str]]:
+    """Fontes do perfil do projeto (.sunhub.toml na pasta atual ou acima); None = todas."""
+    if everything:
+        return None
+    prof, allowed = profile.for_cwd(cfg)
+    if prof:
+        typer.secho(f"perfil do projeto: {prof.path} ({len(allowed or [])} fonte(s); use --all para ignorar)",
+                    dim=True, err=True)
+    return allowed
+
+
+ALL_OPT = typer.Option(False, "--all", "-a", help="Ignora o .sunhub.toml do projeto e usa todas as fontes.")
 
 
 def _kind(kind: Optional[str]) -> Optional[str]:
@@ -104,7 +121,7 @@ def setup(
 
 @app.command()
 def add(
-    location: str = typer.Argument(..., help="URL Git (https/ssh) ou pasta local."),
+    location: str = typer.Argument(..., help="URL Git (https/ssh), pasta local ou export .zip (Confluence, Notion…)."),
     name: Optional[str] = typer.Option(None, "--name", "-n", help="Nome da fonte (padrão: nome do repo)."),
     branch: Optional[str] = typer.Option(None, "--branch", "-b"),
     ref: Optional[str] = typer.Option(None, "--ref", help="Fixar numa tag/commit."),
@@ -121,7 +138,8 @@ def add(
                 sync_mod.add_source(cfg, st, src, sync=False)
                 ok(f"{src.name} cadastrada (rode `sunhub sync`)")
                 return
-            typer.echo(f"→ clonando {src.location} …" if src.is_git else f"→ indexando {src.local} …")
+            typer.echo({"git": f"→ clonando {src.location} …", "archive": f"→ extraindo {src.archive} …"}
+                       .get(src.kind, f"→ indexando {src.local} …"))
             r = sync_mod.add_source(cfg, st, src)
     except (ConfigError, sync_mod.SyncBusy) as e:
         fail(str(e))
@@ -173,7 +191,8 @@ def sync(
     cfg = load_cfg()
     try:
         with Store() as st:
-            results, report = sync_mod.sync_all(cfg, st, names=names or None, full=full, blocking=not quiet)
+            results, report = sync_mod.sync_all(cfg, st, names=names or None, full=full, blocking=not quiet,
+                                                notify_user=quiet)
     except sync_mod.SyncBusy as e:
         if quiet:
             raise typer.Exit(0)
@@ -199,10 +218,13 @@ def search(
     kind: Optional[str] = typer.Option(None, "--kind", "-k", help="adr | guideline | antipattern | skill | doc"),
     source: Optional[str] = typer.Option(None, "--source", "-s"),
     limit: int = typer.Option(10, "--limit", "-l"),
+    everything: bool = ALL_OPT,
 ):
-    """Busca na base de conhecimento."""
+    """Busca na base de conhecimento (texto e, se ligada, por significado)."""
+    cfg = load_cfg()
+    sources = _scope(cfg, everything)
     with Store() as st:
-        hits = st.search(query, _kind(kind), source, limit)
+        hits = search_mod.search(st, query, _kind(kind), source, limit, sources=sources)
     if not hits:
         typer.echo("Nada encontrado.")
         raise typer.Exit(1)
@@ -214,11 +236,13 @@ def search(
 def get(
     ref: str = typer.Argument(..., help="adr:14 · ADR-014 · skill:nome · guideline:nome · <fonte>:<arquivo>"),
     raw: bool = typer.Option(False, "--raw", help="Só o conteúdo, sem cabeçalho."),
+    everything: bool = ALL_OPT,
 ):
     """Imprime um documento (bom para pipes: `sunhub get adr:14 | xclip`)."""
     cfg = load_cfg()
+    sources = _scope(cfg, everything)
     with Store() as st:
-        doc, others = resolver.resolve(st, ref, cfg.priorities())
+        doc, others = resolver.resolve(st, ref, cfg.priorities(), sources)
     if not doc:
         fail(f"'{ref}' não encontrado (tente `sunhub search`)")
     if not raw:
@@ -234,14 +258,16 @@ def context(
     adr: Optional[List[str]] = typer.Option(None, "--adr", help="ADR a incluir (repetível)."),
     skill: Optional[List[str]] = typer.Option(None, "--skill", help="Skill a incluir (repetível)."),
     ref: Optional[List[str]] = typer.Option(None, "--ref", help="Qualquer referência (repetível)."),
+    everything: bool = ALL_OPT,
 ):
     """Monta um pacote de contexto para colar em ferramentas sem MCP."""
     refs = [f"adr:{a}" for a in adr or []] + [f"skill:{s}" for s in skill or []] + list(ref or [])
     if not task and not refs:
         fail("informe uma tarefa ou referências (--adr, --skill, --ref)")
     cfg = load_cfg()
+    sources = _scope(cfg, everything)
     with Store() as st:
-        text, missing = context_mod.build(st, task, refs, cfg.priorities())
+        text, missing = context_mod.build(st, task, refs, cfg.priorities(), sources=sources)
     typer.echo(text)
     for m in missing:
         warn(f"não encontrado: {m}")
@@ -330,10 +356,19 @@ def uninstall_mcp(keys: List[str] = typer.Argument(..., help="Clientes.")):
 def init_project(
     path: Path = typer.Argument(Path("."), help="Pasta do projeto."),
     copilot: bool = typer.Option(True, "--copilot/--no-copilot", help="Também em .github/copilot-instructions.md"),
+    sources: Optional[str] = typer.Option(None, "--sources", help="Fontes que valem neste projeto (vírgula); "
+                                                                   "cria o .sunhub.toml."),
 ):
-    """Adiciona um bloco curto no AGENTS.md do projeto apontando para o Sunhub."""
+    """Prepara um projeto: bloco curto no AGENTS.md e, com --sources, o perfil .sunhub.toml."""
     for f in setup_mod.init_project(path, copilot):
         ok(f)
+    if sources:
+        names = [s.strip() for s in sources.split(",") if s.strip()]
+        known = {s.name for s in load_cfg().sources}
+        for n in names:
+            if "*" not in n and n not in known:
+                warn(f"'{n}' não é uma fonte vinculada (sunhub list)")
+        ok(f"perfil: {profile.write(path, names)}")
 
 
 @app.command()
@@ -350,11 +385,11 @@ def doctor():
 
 
 @timer_app.command("enable")
-def timer_enable(interval: Optional[int] = typer.Option(None, "--interval", "-i", help="Minutos (mín. 5).")):
+def timer_enable(interval: Optional[int] = typer.Option(None, "--interval", "-i", help="Minutos (mín. 1).")):
     """Liga o sync automático."""
     cfg = load_cfg()
     if interval:
-        cfg.settings.sync_interval_minutes = max(5, interval)
+        cfg.settings.sync_interval_minutes = max(1, interval)
         config.save(cfg)
     try:
         ok(systemd.enable(cfg.settings.sync_interval_minutes))
@@ -375,6 +410,179 @@ def timer_status():
 
 
 # ------------------------------------------------------------------ apps
+
+# ------------------------------------------------------------------ qualidade, novidades, uso
+
+@app.command()
+def lint(
+    path: Optional[Path] = typer.Argument(None, help="Pasta a verificar (ex.: na CI do repositório de ADRs). "
+                                                     "Sem argumento: todas as fontes vinculadas."),
+    strict: bool = typer.Option(False, "--strict", help="Avisos também fazem falhar (código de saída 1)."),
+):
+    """Verifica ADRs, skills e links: status faltando, ADR substituído por um que não existe, skill sem descrição…"""
+    if path is not None:
+        if not path.is_dir():
+            fail(f"{path} não é uma pasta")
+        issues = lint_mod.lint_path(path, path.resolve().name)
+    else:
+        cfg = load_cfg()
+        with Store() as st:
+            issues = lint_mod.lint_sources(cfg, st)
+    typer.echo(lint_mod.format_issues(issues))
+    if any(i.level == "error" for i in issues) or (strict and issues):
+        raise typer.Exit(1)
+
+
+@app.command()
+def changes(
+    days: int = typer.Option(7, "--days", "-d", help="Últimos N dias."),
+    everything: bool = ALL_OPT,
+):
+    """O que mudou nas fontes: ADRs/skills novos, removidos, alterados e mudanças de status."""
+    from datetime import datetime, timedelta, timezone
+
+    cfg = load_cfg()
+    sources = _scope(cfg, everything)
+    with Store() as st:
+        rows = st.changes(datetime.now(timezone.utc) - timedelta(days=days), sources=sources)
+    if not rows:
+        typer.echo(f"Nenhuma novidade nos últimos {days} dia(s).")
+        return
+    for c in rows:
+        when = datetime.fromisoformat(c["ts"]).astimezone().strftime("%d/%m %H:%M")
+        color = {"added": "green", "removed": "red", "status": "yellow"}.get(c["change"])
+        typer.secho(f"{when}  [{c['source']}] {notify_mod.describe(c)}", fg=color)
+
+
+@app.command()
+def usage(days: int = typer.Option(30, "--days", "-d")):
+    """O que o agente consultou: documentos mais lidos, buscas sem resposta (lacunas) e o que nunca é lido."""
+    with Store() as st:
+        rep = st.usage_report(days)
+    typer.echo(f"Últimos {days} dias: {rep['total']} consulta(s) do agente")
+    if rep["by_tool"]:
+        typer.echo("  " + " · ".join(f"{k} {v}" for k, v in rep["by_tool"].items()))
+    if rep["top"]:
+        typer.secho("\nMais lidos", bold=True)
+        for r in rep["top"]:
+            typer.echo(f"  {r['n']:>4}×  {r['kind']}:{r['ref_id']}  {r['title']}  ({r['source']})")
+    if rep["gaps"]:
+        typer.secho("\nBuscas sem resultado (possíveis lacunas na documentação)", bold=True)
+        for r in rep["gaps"]:
+            typer.echo(f"  {r['n']:>4}×  {r['query']}")
+    typer.echo(f"\nNunca lidos no período: {len(rep['unread'])} documento(s) (sem contar skills)")
+
+
+@app.command("propose-adr")
+def propose_adr(
+    title: str = typer.Option(..., "--title", "-t"),
+    context: str = typer.Option("", "--context"),
+    decision: str = typer.Option("", "--decision"),
+    consequences: str = typer.Option("", "--consequences"),
+    alternatives: str = typer.Option("", "--alternatives"),
+    source: Optional[str] = typer.Option(None, "--source", "-s", help="Fonte que recebe o ADR (padrão: a com mais ADRs)."),
+    no_push: bool = typer.Option(False, "--no-push", help="Só cria a branch local, sem enviar nem abrir PR."),
+):
+    """Cria um ADR novo no formato do repositório, numa branch, e abre um PR (gh) para revisão."""
+    from sunhub import propose
+
+    cfg = load_cfg()
+    try:
+        with Store() as st:
+            p = propose.propose(cfg, st, title, context, decision, consequences, alternatives, source, push=not no_push)
+    except (propose.ProposalError, ConfigError) as e:
+        fail(str(e))
+    ok(p.message)
+
+
+semantic_app = typer.Typer(help="Busca por significado (embeddings locais, opcional).", no_args_is_help=True)
+app.add_typer(semantic_app, name="semantic")
+
+
+@semantic_app.command("on")
+def semantic_on():
+    """Liga: instala o fastembed se faltar, baixa o modelo (~220 MB, uma vez) e indexa."""
+    from sunhub import semantic
+
+    try:
+        typer.echo("→ " + semantic.install())
+        cfg = load_cfg()
+        cfg.settings.semantic = True
+        config.save(cfg)
+        typer.echo("→ calculando vetores (a primeira vez baixa o modelo)…")
+        with Store() as st:
+            n = semantic.update_index(st, semantic.get_embedder())
+    except Exception as e:  # noqa: BLE001
+        fail(f"não consegui ligar a busca por significado: {e}")
+    ok(f"busca por significado ligada ({n} documento(s) indexado(s))")
+
+
+@semantic_app.command("off")
+def semantic_off():
+    """Desliga (os vetores ficam guardados)."""
+    cfg = load_cfg()
+    cfg.settings.semantic = False
+    config.save(cfg)
+    ok("busca por significado desligada")
+
+
+@semantic_app.command("status")
+def semantic_status():
+    from sunhub import semantic
+
+    cfg = load_cfg()
+    typer.echo(f"ligada: {'sim' if cfg.settings.semantic else 'não'} · fastembed: "
+               f"{'instalado' if semantic.installed() else 'não instalado'} · modelo: {semantic.MODEL}")
+
+
+SETTING_HELP = {
+    "sync_interval_minutes": "minutos entre verificações automáticas",
+    "link_targets": "pastas de skills: copilot,claude,agents",
+    "link_mode": "symlink | copy",
+    "notify": "notificação do sistema quando há novidades (true/false)",
+    "semantic": "busca por significado (use `sunhub semantic on`)",
+    "allow_proposals": "o agente pode propor ADRs, criando branch e PR (true/false)",
+    "tray": "o app fica na bandeja ao fechar a janela (true/false)",
+    "gui_port": "(legado)",
+}
+
+
+@app.command("config")
+def config_cmd(
+    key: Optional[str] = typer.Argument(None, help="Configuração."),
+    value: Optional[str] = typer.Argument(None, help="Novo valor."),
+):
+    """Mostra ou altera configurações: `sunhub config`, `sunhub config notify false`."""
+    from dataclasses import asdict
+
+    cfg = load_cfg()
+    current = asdict(cfg.settings)
+    if key is None:
+        for k, v in current.items():
+            typer.echo(f"{k:<24} {v!s:<22} {SETTING_HELP.get(k, '')}")
+        return
+    if key not in current:
+        fail(f"configuração desconhecida '{key}'. Opções: {', '.join(current)}")
+    if value is None:
+        typer.echo(current[key])
+        return
+    old = current[key]
+    if isinstance(old, bool):
+        if value.lower() not in ("true", "false", "1", "0", "sim", "nao", "não", "on", "off"):
+            fail("use true ou false")
+        new = value.lower() in ("true", "1", "sim", "on")
+    elif isinstance(old, int):
+        new = int(value)
+    elif isinstance(old, list):
+        new = [v.strip() for v in value.split(",") if v.strip()]
+    else:
+        new = value
+    setattr(cfg.settings, key, new)
+    config.save(cfg)
+    ok(f"{key} = {new}")
+    if key == "sync_interval_minutes" and systemd.status() == "active":
+        typer.echo("  (rode `sunhub timer enable` para aplicar ao timer)")
+
 
 def _launch_app() -> None:
     try:
@@ -418,4 +626,9 @@ def uninstall(
 
 
 def main() -> None:
+    import os
+    import sys
+
+    if len(sys.argv) == 1 and os.environ.get("APPIMAGE"):  # duplo clique no .AppImage abre o app
+        sys.argv.append("app")
     app()
