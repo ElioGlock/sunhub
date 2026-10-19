@@ -637,13 +637,18 @@ def mcp():
 
 @app.command()
 def uninstall(
-    purge: bool = typer.Option(False, "--purge", help=f"Também apaga o hub ({paths.home()})."),
-    yes: bool = typer.Option(False, "--yes", "-y"),
+    keep_data: bool = typer.Option(False, "--keep-data", help=f"Mantém a pasta do hub ({paths.home()})."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Não pede confirmação."),
+    purge: bool = typer.Option(False, "--purge", hidden=True),  # compatibilidade: agora é o padrão
 ):
-    """Desfaz tudo o que o Sunhub configurou no sistema (links, MCP, timer, blocos)."""
+    """Remove do computador tudo o que o Sunhub criou, inclusive a pasta ~/sunhub."""
     if not yes:
-        typer.confirm("Remover links de skills, registros MCP, timer e blocos de shell?", abort=True)
-    for msg in setup_mod.uninstall(purge):
+        typer.echo("Vai remover:")
+        for item in setup_mod.uninstall_plan(keep_data):
+            typer.echo(f"  - {item}")
+        typer.echo("Pastas locais vinculadas como fonte e os seus repositórios não são apagados.")
+        typer.confirm("Continuar?", abort=True)
+    for msg in setup_mod.uninstall(keep_data):
         ok(msg)
 
 

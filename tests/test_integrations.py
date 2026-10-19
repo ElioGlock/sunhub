@@ -65,3 +65,28 @@ def test_mcp_tools(knowledge_repo):
     assert "não encontrada" in run(mcp_server.sun_get("adr:999"))
     assert "fonte eng-knowledge vinculada" in run(mcp_server.sun_changes(7))
     assert "desligado" in run(mcp_server.sun_propose_adr("Usar Kafka", "c", "d", "e"))
+
+
+def test_uninstall_removes_everything(env, knowledge_repo):
+    from sunhub import actions, linker, paths
+
+    actions.add_source(knowledge_repo.as_uri())
+    setup.setup()
+    mine = env / ".claude" / "skills" / "minha-skill"
+    mine.mkdir(parents=True)
+    (mine / "SKILL.md").write_text("x", encoding="utf-8")
+    for t in linker.TARGET_DIRS:
+        linker.target_dir(t).mkdir(parents=True, exist_ok=True)
+    setup.uninstall()
+    assert not paths.home().exists()
+    assert (mine / "SKILL.md").exists()  # o que é do usuário fica
+    assert not (env / ".copilot").exists()  # pasta criada só pelo Sunhub e vazia some
+    assert not (env / ".local" / "share" / "applications" / "sunhub.desktop").exists()
+
+
+def test_uninstall_keep_data(env, knowledge_repo):
+    from sunhub import paths
+
+    setup.setup()
+    setup.uninstall(keep_data=True)
+    assert paths.home().exists()

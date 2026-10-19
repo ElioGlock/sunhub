@@ -28,7 +28,7 @@ dos repositórios e as ferramentas a integrar. Depois disso:
 - no terminal, o comando `sunhub` fica disponível (`sunhub --help`).
 
 `source app --install` só instala/atualiza, sem abrir. Funciona em bash e zsh, sem sudo. Para atualizar o app:
-`git pull` e `source app`. Para remover: `./uninstall.sh` (`--purge` apaga também `~/sunhub`).
+`git pull` e `source app`. Para remover: `./uninstall.sh` — apaga tudo o que o Sunhub criou, inclusive `~/sunhub` e o `.venv` (`--keep-data` mantém `~/sunhub`).
 
 Requisitos no Linux: interface gráfica, Python 3.10+ e git. Se a janela não abrir no Ubuntu/Debian:
 `sudo apt install libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0`.
@@ -44,7 +44,7 @@ cd sunhub
 ```
 
 Na primeira vez ele prepara tudo (sem administrador) e abre o app. Depois: **Sunhub** no Menu Iniciar, `sunhub` em
-terminais novos. `.\app.cmd --install` só instala/atualiza; `.\uninstall.cmd` desfaz (`--purge` apaga o hub).
+terminais novos. `.\app.cmd --install` só instala/atualiza; `.\uninstall.cmd` remove tudo, inclusive `%USERPROFILE%\sunhub` (`--keep-data` mantém o hub).
 
 | No Windows | Como funciona |
 |---|---|

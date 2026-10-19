@@ -283,7 +283,7 @@ sunhub gui           # abre a GUI local; 1ª execução = assistente que pede as
 
 ### 12.3 Segurança das alterações em arquivos do usuário
 - Edita configs existentes só dentro de **blocos marcados** (`# >>> sunhub >>>` … `# <<< sunhub <<<`) ou chaves JSON próprias; faz **backup** antes.
-- `sunhub uninstall` desfaz tudo via manifesto (links, blocos, timer). `sunhub doctor` verifica.
+- `sunhub uninstall` fecha o app, desfaz tudo via manifesto (links, MCP, blocos, timer/tarefa, atalho, PATH), remove pastas que ficaram vazias e apaga o hub (`--keep-data` mantém). `sunhub doctor` verifica.
 
 ### 12.4 Limite importante
 Não existe pasta "universal" que toda ferramenta enxergue. O vínculo é feito pelos **caminhos nativos de cada ferramenta**
@@ -322,7 +322,7 @@ sem servidor HTTP e sem porta aberta.
   roda `sunhub setup` (hub, `SUNHUB_HOME`, `~/.local/bin/sunhub`, atalho `.desktop` + ícone) e abre o app em
   segundo plano. Reexecuções só abrem; mudanças no `pyproject.toml` disparam reinstalação. Instalações antigas via
   `uv tool` são migradas e as integrações (MCP, timer) são reapontadas para o novo Python.
-- Desinstalação: tudo que foi criado entra no manifesto (`files`, `links`, `mcp`, `blocks`) e `sunhub uninstall` remove.
+- Desinstalação: tudo que foi criado entra no manifesto (`files`, `links`, `mcp`, `blocks`, `winpath`) e `sunhub uninstall` remove, junto com `~/sunhub`. Projetos onde rodou `init-project` só são listados, nunca alterados.
 
 ## 15. v0.3: novidades, qualidade, perfis, significado, propostas, AppImage
 

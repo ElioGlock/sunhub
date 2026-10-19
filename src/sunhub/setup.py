@@ -205,23 +205,103 @@ def init_project(project: Path, copilot: bool = True) -> list[str]:
         f = project / ".github" / "copilot-instructions.md"
         blocks.upsert(f, PROJECT_BLOCK, blocks.MARKDOWN, track=False)
         written.append(str(f))
+    state.remember("projects", {"path": str(project)})  # só para listar no uninstall; nunca apagamos projetos
     return written
 
 
-def uninstall(purge: bool = False) -> list[str]:
+def _stop_running_app() -> bool:
+    """Fecha o app do Sunhub se estiver aberto (senão ele recriaria arquivos durante a desinstalação)."""
+    stopped = False
+    me = os.getpid()
+    if osutil.IS_WINDOWS:
+        ps = ("Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne %d -and $_.CommandLine -and "
+              "($_.CommandLine -match 'sunhub\\s+app' -or $_.CommandLine -match 'Sunhub\\.exe') } | "
+              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force; 'x' }" % me)
+        p = osutil.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+                       timeout=60)
+        return "x" in (p.stdout or "")
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return False
+    import signal  # noqa: PLC0415
+
+    for d in proc.iterdir():
+        if not d.name.isdigit() or int(d.name) == me:
+            continue
+        try:
+            args = (d / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        text = [a.decode("utf-8", "replace") for a in args if a]
+        if any(a.endswith("sunhub") or a == "sunhub" or a.endswith(".AppImage") for a in text) and "app" in text:
+            try:
+                os.kill(int(d.name), signal.SIGTERM)
+                stopped = True
+            except OSError:
+                pass
+    return stopped
+
+
+def _remove_if_empty(*dirs: Path) -> list[str]:
+    """Remove pastas que ficaram vazias (ex.: ~/.claude/skills criada pelo Sunhub). Nunca apaga conteúdo."""
+    removed = []
+    for d in dirs:
+        try:
+            if d.is_dir() and not osutil.is_link(d) and not any(d.iterdir()):
+                d.rmdir()
+                removed.append(str(d))
+        except OSError:
+            pass
+    return removed
+
+
+def uninstall_plan(keep_data: bool = False) -> list[str]:
+    """O que será removido (para confirmar antes)."""
+    m = state.load()
+    plan = [f"{len(m['links'])} link(s) de skills nas pastas das ferramentas",
+            f"registro do MCP em {len(m['mcp'])} ferramenta(s)",
+            f"atualização automática ({scheduler.NAME})",
+            "atalho no menu, comando `sunhub` e blocos no perfil do shell"]
+    if not keep_data:
+        plan.append(f"a pasta {paths.home()} inteira (configuração, clones, índice, histórico)")
+    return plan
+
+
+def uninstall(keep_data: bool = False) -> list[str]:
+    """Remove tudo o que o Sunhub criou no computador. Com keep_data, mantém a pasta do hub."""
     done = []
+    if _stop_running_app():
+        done.append("app do Sunhub fechado")
+        import time  # noqa: PLC0415
+
+        time.sleep(1)
+    # 1. atualização automática primeiro, para nada rodar no meio da remoção
+    try:
+        done.append(scheduler.disable())
+    except Exception as e:  # noqa: BLE001
+        done.append(f"agendador: {e}")
+    # 2. skills publicadas e pastas de skills que ficaram vazias
     n = linker.unlink_all()
-    done.append(f"{n} skills despublicadas")
+    done.append(f"{n} link(s) de skills removido(s)")
+    for t in linker.TARGET_DIRS:
+        d = linker.target_dir(t)
+        done += [f"pasta vazia removida: {p}" for p in _remove_if_empty(d, d.parent)]
+    # 3. MCP em cada ferramenta (+ backups que o Sunhub fez desses arquivos)
     for entry in list(state.load()["mcp"]):
         try:
             done.append(clients.uninstall(clients.get(entry["client"])))
         except clients.ClientError as e:
             done.append(str(e))
-    if scheduler.status() != "not-installed":
-        done.append(scheduler.disable())
+    for c in clients.CLIENTS:
+        f = c.file
+        if f is not None and f.parent.is_dir():
+            for bak in f.parent.glob(f"{f.name}.sunhub-bak-*"):
+                bak.unlink(missing_ok=True)
+                done.append(f"backup removido: {bak}")
+    # 4. atalho, ícone, comando no terminal, PATH (Windows), blocos no perfil do shell
     for entry in list(state.load()["files"]):
         f = Path(entry["path"])
-        if f.is_symlink() or f.is_file():
+        if osutil.is_link(f) or f.is_file():
             f.unlink()
             done.append(f"removido {f}")
         state.forget("files", entry)
@@ -232,10 +312,30 @@ def uninstall(purge: bool = False) -> list[str]:
         except OSError:
             pass
         state.forget("winpath", entry)
+    if osutil.IS_WINDOWS:
+        done += [f"pasta vazia removida: {p}" for p in _remove_if_empty(win_bin_dir(), win_bin_dir().parent)]
+    else:
+        done += [f"pasta vazia removida: {p}" for p in _remove_if_empty(scheduler_unit_dir())]
     for entry in list(state.load()["blocks"]):
         if blocks.remove(Path(entry["file"]), tuple(entry["markers"])):
             done.append(f"bloco removido de {entry['file']}")
-    if purge and paths.home().exists():
+    # 5. temporários do lançador
+    tmp_dirs = [Path(os.environ.get("TEMP", ""))] if osutil.IS_WINDOWS else [Path.home() / ".cache"]
+    for d in tmp_dirs:
+        for name in ("sunhub-app.log", "sunhub-app.ready", "sunhub-app.pid"):
+            (d / name).unlink(missing_ok=True)
+    projects = [e["path"] for e in state.load()["projects"]]
+    # 6. o hub inteiro
+    if keep_data:
+        done.append(f"mantido: {paths.home()} (use sem --keep-data para apagar)")
+    elif paths.home().exists():
         osutil.rmtree(paths.home())
         done.append(f"{paths.home()} apagado")
+    if projects:
+        done.append("seus projetos não foram alterados; se quiser, tire o bloco do Sunhub do AGENTS.md e o "
+                    ".sunhub.toml em: " + ", ".join(projects))
     return done
+
+
+def scheduler_unit_dir() -> Path:
+    return Path.home() / ".config" / "systemd" / "user"
