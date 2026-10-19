@@ -11,29 +11,29 @@ from sunhub.cli import app
 def test_vscode_mcp_install_keeps_existing(env):
     f = osutil.vscode_user_dir() / "mcp.json"
     f.parent.mkdir(parents=True)
-    f.write_text('{\n  // comentário\n  "servers": {"outro": {"command": "x"}},\n}\n')
+    f.write_text('{\n  // comentário\n  "servers": {"outro": {"command": "x"}},\n}\n', encoding="utf-8")
     c = clients.get("vscode")
     assert c.detected()
     clients.install(c)
-    data = json.loads(f.read_text())
+    data = json.loads(f.read_text(encoding="utf-8"))
     assert set(data["servers"]) == {"outro", "sunhub"}
     assert data["servers"]["sunhub"]["args"] == ["-m", "sunhub", "mcp"]
     assert clients.installed(c)
     assert list(f.parent.glob("mcp.json.sunhub-bak-*"))
     clients.uninstall(c)
-    assert set(json.loads(f.read_text())["servers"]) == {"outro"}
+    assert set(json.loads(f.read_text(encoding="utf-8"))["servers"]) == {"outro"}
 
 
 @pytest.mark.skipif(osutil.IS_WINDOWS, reason="blocos de shell são do Linux/macOS")
 def test_blocks_and_uninstall(env):
     p = env / ".profile"
-    p.write_text("export A=1\n")
+    p.write_text("export A=1\n", encoding="utf-8")
     setup.setup()
     setup.setup()  # idempotente
-    text = p.read_text()
+    text = p.read_text(encoding="utf-8")
     assert text.count(blocks.SHELL[0]) == 1 and "SUNHUB_HOME" in text and text.startswith("export A=1")
     setup.uninstall()
-    assert p.read_text().strip() == "export A=1"
+    assert p.read_text(encoding="utf-8").strip() == "export A=1"
 
 
 def test_cli_flow(knowledge_repo):

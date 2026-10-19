@@ -234,6 +234,6 @@ def uninstall(purge: bool = False) -> list[str]:
         if blocks.remove(Path(entry["file"]), tuple(entry["markers"])):
             done.append(f"bloco removido de {entry['file']}")
     if purge and paths.home().exists():
-        shutil.rmtree(paths.home())
+        osutil.rmtree(paths.home())
         done.append(f"{paths.home()} apagado")
     return done

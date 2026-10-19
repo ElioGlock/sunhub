@@ -72,10 +72,10 @@ def test_links(knowledge_repo, tmp_path, env):
     own = env / ".agents/skills/api-standards"
     linker.unlink_all()
     own.mkdir(parents=True)
-    (own / "SKILL.md").write_text("minha")
+    (own / "SKILL.md").write_text("minha", encoding="utf-8")
     with Store() as st:
         rep = linker.relink(config.load(), st)
-    assert str(own) in rep.conflicts and (own / "SKILL.md").read_text() == "minha"
+    assert str(own) in rep.conflicts and (own / "SKILL.md").read_text(encoding="utf-8") == "minha"
     # segunda fonte com skill de mesmo nome → nomes com prefixo
     other = tmp_path / "remote" / "other"
     other.mkdir()

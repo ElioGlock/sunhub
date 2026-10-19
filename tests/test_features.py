@@ -31,7 +31,7 @@ def test_changes_feed(knowledge_repo):
     r = _add(knowledge_repo.as_uri())
     assert r.changes[0]["change"] == "source_added"
     (knowledge_repo / "adrs" / "0014-cursor-pagination.md").write_text(
-        "# Paginação por cursor\n\nStatus: Superseded by ADR-020\n\nDecisão antiga.\n")
+        "# Paginação por cursor\n\nStatus: Superseded by ADR-020\n\nDecisão antiga.\n", encoding="utf-8")
     write(knowledge_repo, "adrs/0020-keyset.md", "# Keyset\n\nStatus: Aceito\n\nSubstitui ADR-014.\n")
     write(knowledge_repo, "skills/nova/SKILL.md", "---\nname: nova\ndescription: nova skill\n---\nx\n")
     (knowledge_repo / "guidelines" / "rest-naming.md").unlink()
@@ -187,23 +187,38 @@ def test_zip_export_with_html_and_pdf(tmp_path):
 @pytest.mark.skipif(osutil.IS_WINDOWS, reason="AppImage é do Linux")
 def test_appimage_runtime(tmp_path, monkeypatch, env):
     img = tmp_path / "Sunhub-x86_64.AppImage"
-    img.write_text("#!/bin/sh\n")
+    img.write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setenv("APPIMAGE", str(img))
     spec = clients.server_spec()
     assert spec["command"] == str(img) and spec["args"] == ["mcp"]
     link = setup.link_cli()
-    assert link and f'exec "{img}"' in (env / ".local/bin/sunhub").read_text()
+    assert link and f'exec "{img}"' in (env / ".local/bin/sunhub").read_text(encoding="utf-8")
     entry = setup.install_launcher()
-    assert f"Exec={img} app" in open(entry).read()
+    assert f"Exec={img} app" in open(entry, encoding="utf-8").read()
 
 
 def test_mcp_install_is_idempotent(env):
     osutil.vscode_user_dir().parent.mkdir(parents=True)
     c = clients.get("vscode")
     clients.install(c)
-    first = (osutil.vscode_user_dir() / "mcp.json").read_text()
+    first = (osutil.vscode_user_dir() / "mcp.json").read_text(encoding="utf-8")
     assert "já registrado" in clients.install(c)
-    assert (osutil.vscode_user_dir() / "mcp.json").read_text() == first
+    assert (osutil.vscode_user_dir() / "mcp.json").read_text(encoding="utf-8") == first
     assert not list(osutil.vscode_user_dir().glob("*.sunhub-bak-*"))
     assert json.loads(first)["servers"]["sunhub"]["args"][-1] == "mcp"
     assert resolver  # import usado
+
+
+def test_accented_file_names_and_bom_config(knowledge_repo, env):
+    _add(knowledge_repo.as_uri())
+    write(knowledge_repo, "adrs/0030-decisão-de-filas.md", "# Decisão de filas\n\nStatus: Aceito\n\nUsar fila.\n")
+    commit(knowledge_repo)
+    (res,) = _sync()
+    assert res.ok and ("added", "adr:ADR-030") in {(c["change"], c.get("ref")) for c in res.changes}
+    with Store() as st:
+        assert st.get("eng-knowledge:adrs/0030-decisão-de-filas.md") is not None
+    cfg_file = osutil.vscode_user_dir() / "mcp.json"
+    cfg_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg_file.write_bytes("\ufeff{\"servers\": {\"outro\": {\"command\": \"ação\"}}}".encode("utf-8"))
+    clients.install(clients.get("vscode"))
+    assert set(json.loads(cfg_file.read_text(encoding="utf-8"))["servers"]) == {"outro", "sunhub"}

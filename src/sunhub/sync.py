@@ -1,7 +1,6 @@
 """Clona/atualiza as fontes, reindexa, registra novidades e religa skills."""
 from __future__ import annotations
 
-import shutil
 import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -100,7 +99,7 @@ def _extract_archive(src: Source, root: Path, store: Store) -> tuple[str, str, b
     if prev == marker and root.is_dir():
         return marker, "em dia", False
     tmp = root.with_name(root.name + ".extraindo")
-    shutil.rmtree(tmp, ignore_errors=True)
+    osutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     base = tmp.resolve()
     try:
@@ -112,9 +111,9 @@ def _extract_archive(src: Source, root: Path, store: Store) -> tuple[str, str, b
                     continue  # ignora symlinks e caminhos que escapam da pasta (zip slip)
                 zf.extract(member, tmp)
     except zipfile.BadZipFile as e:
-        shutil.rmtree(tmp, ignore_errors=True)
+        osutil.rmtree(tmp, ignore_errors=True)
         raise SyncError(f"{z.name} não é um .zip válido") from e
-    shutil.rmtree(root, ignore_errors=True)
+    osutil.rmtree(root, ignore_errors=True)
     tmp.rename(root)
     return marker, "extraído", True
 
@@ -264,7 +263,7 @@ def remove_source(cfg: Config, store: Store, name: str) -> Source:
         root = src.checkout_dir().resolve()
         base = paths.sources_dir().resolve()
         if root.parent == base and root.exists():  # só apaga o que o Sunhub criou
-            shutil.rmtree(root)
+            osutil.rmtree(root)
     if dependents:  # variações que dependiam desta fonte passam a ter o conteúdo completo
         sync_all(cfg, store, names=dependents, full=True)
     else:

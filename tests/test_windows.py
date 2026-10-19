@@ -13,7 +13,8 @@ def test_task_definition_is_valid_xml(env):
     assert root.find("t:Triggers/t:TimeTrigger/t:Repetition/t:Interval", NS).text == "PT15M"
     assert root.find("t:Settings/t:Hidden", NS).text == "true"
     exec_ = root.find("t:Actions/t:Exec", NS)
-    assert exec_.find("t:Command", NS).text == sys.executable
+    # no Windows o agendador usa o pythonw.exe (sem janela de console); no Linux, o próprio python
+    assert exec_.find("t:Command", NS).text == runtime.self_command(background=True)[0]
     assert exec_.find("t:Arguments", NS).text.endswith("sync --quiet")
 
 
@@ -25,8 +26,8 @@ def test_task_rewrite_only_when_needed(env):
 
 def test_background_command_uses_pythonw(tmp_path, monkeypatch, env):
     py = tmp_path / "python.exe"
-    py.write_text("")
-    (tmp_path / "pythonw.exe").write_text("")
+    py.write_text("", encoding="utf-8")
+    (tmp_path / "pythonw.exe").write_text("", encoding="utf-8")
     monkeypatch.setattr(osutil, "IS_WINDOWS", True)
     monkeypatch.setattr(sys, "executable", str(py))
     monkeypatch.delenv("APPIMAGE", raising=False)
@@ -36,7 +37,7 @@ def test_background_command_uses_pythonw(tmp_path, monkeypatch, env):
 
 def test_frozen_commands(tmp_path, monkeypatch, env):
     for name in ("Sunhub.exe", "sunhub-cli.exe"):
-        (tmp_path / name).write_text("")
+        (tmp_path / name).write_text("", encoding="utf-8")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(tmp_path / "Sunhub.exe"))
     monkeypatch.delenv("APPIMAGE", raising=False)

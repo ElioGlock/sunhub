@@ -29,10 +29,11 @@ def run(args: list[str], cwd: Path | str | None = None, timeout: int = 300) -> s
     env["GIT_TERMINAL_PROMPT"] = "0"  # nunca travar pedindo senha
     try:
         p = osutil.run(
-            ["git", *args],
+            ["git", "-c", "core.quotepath=off", *args],  # caminhos com acento chegam como texto, não \303\247
             cwd=cwd,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env=env,
             stdin=subprocess.DEVNULL,
@@ -88,7 +89,7 @@ def clone(url: str, dest: Path, branch: str | None = None, sparse_paths: list[st
                 run(["sparse-checkout", "set", "--", *sparse_paths], cwd=dest)
             return
         except GitError:
-            shutil.rmtree(dest, ignore_errors=True)
+            osutil.rmtree(dest, ignore_errors=True)
             if with_ref:
                 continue  # sem reaproveitar objetos, tenta de novo
             raise

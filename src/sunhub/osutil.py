@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -15,10 +17,33 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    """subprocess.run sem abrir janela de console no Windows (o app e o agendador rodam sem console)."""
+    """subprocess.run sem abrir janela de console no Windows (o app e o agendador rodam sem console).
+
+    Com text=True, bytes que não cabem na codificação viram '?' em vez de derrubar o processo
+    (no Windows a codificação padrão do console não é UTF-8)."""
     if IS_WINDOWS:
         kw["creationflags"] = kw.get("creationflags", 0) | NO_WINDOW
+    if kw.get("text") or kw.get("encoding"):
+        kw.setdefault("errors", "replace")
     return subprocess.run(cmd, **kw)
+
+
+def rmtree(path: Path, ignore_errors: bool = False) -> None:
+    """shutil.rmtree que também apaga arquivos somente leitura (o .git no Windows tem vários)."""
+    def on_error(func, p, _exc):
+        try:
+            os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+            func(p)
+        except OSError:
+            if not ignore_errors:
+                raise
+
+    if not os.path.lexists(path):
+        return
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=on_error)
+    else:  # pragma: no cover - Python 3.10/3.11
+        shutil.rmtree(path, onerror=on_error)
 
 
 # ------------------------------------------------------------------ pastas do sistema

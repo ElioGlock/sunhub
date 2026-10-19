@@ -144,7 +144,7 @@ def propose(cfg: Config, store: Store, title: str, context: str, decision: str, 
     base = src.branch or git.default_branch(repo) or git.current_branch(repo)
 
     work = paths.state_dir() / "proposals" / branch.replace("/", "_")
-    shutil.rmtree(work, ignore_errors=True)
+    osutil.rmtree(work, ignore_errors=True)
     work.parent.mkdir(parents=True, exist_ok=True)
     try:
         git.run(["fetch", "--quiet", "origin", base], cwd=repo, timeout=300)

@@ -11,7 +11,7 @@ def git(cwd: Path, *args: str) -> str:
 def write(root: Path, rel: str, text: str) -> None:
     f = root / rel
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(text, "utf-8")
+    f.write_text(text, encoding="utf-8")
 
 
 def commit(repo: Path, msg: str = "update") -> None:
@@ -33,7 +33,7 @@ def env(tmp_path, monkeypatch):
     for k, v in {"GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "T",
                  "GIT_COMMITTER_EMAIL": "t@t"}.items():
         monkeypatch.setenv(k, v)
-    (tmp_path / "gitconfig").write_text("[protocol \"file\"]\n\tallow = always\n[uploadpack]\n\tallowFilter = true\n")
+    (tmp_path / "gitconfig").write_text("[protocol \"file\"]\n\tallow = always\n[uploadpack]\n\tallowFilter = true\n", encoding="utf-8")
     return home
 
 

@@ -108,10 +108,22 @@ def _strip_jsonc(text: str) -> str:
     return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
 
 
+def _read_text(f: Path) -> str:
+    raw = f.read_bytes()
+    for enc in ("utf-8-sig", "cp1252"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def _read_json(f: Path) -> dict:
-    if not f.exists() or not f.read_text("utf-8").strip():
+    if not f.exists():
         return {}
-    text = f.read_text("utf-8")
+    text = _read_text(f)
+    if not text.strip():
+        return {}
     for candidate in (text, _strip_jsonc(text)):
         try:
             data = json.loads(candidate)
@@ -142,7 +154,7 @@ def installed(c: Client) -> bool:
         except ClientError:
             return False
     try:
-        data = json.loads((Path.home() / ".claude.json").read_text("utf-8"))
+        data = json.loads(_read_text(Path.home() / ".claude.json"))
         return SERVER_NAME in (data.get("mcpServers") or {})
     except (OSError, ValueError):
         return False

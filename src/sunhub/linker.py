@@ -69,7 +69,7 @@ def _remove_owned(lp: Path, entry: dict) -> bool:
         osutil.remove_link(lp)
         return True
     if entry.get("mode") == "copy" and lp.is_dir() and (lp / COPY_MARKER).exists():
-        shutil.rmtree(lp)
+        osutil.rmtree(lp)
         return True
     return False
 
