@@ -155,7 +155,7 @@ async def sun_get(ref: str, project: Optional[str] = None, ctx: Context = None) 
 
 @mcp.tool()
 async def sun_get_adr(id: str, project: Optional[str] = None, ctx: Context = None) -> str:
-    """Lê um ADR pelo número/id (ex.: 14, ADR-014) com status e a cadeia de substituição.
+    """Lê um ADR pelo número/id (ex.: 14, ADR-014, ADR-flutter-0001, flutter-1) com status e a cadeia de substituição.
 
     Se o ADR foi substituído, inclui também o ADR vigente.
     """

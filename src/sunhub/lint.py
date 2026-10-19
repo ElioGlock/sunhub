@@ -49,7 +49,7 @@ def lint_docs(docs: list[Document], source: str, root: Path | None = None,
                 add("warn", d, f"sem 'name' no front matter; usando o nome da pasta ({d.ref_id})")
         elif d.kind == "adr":
             if not (d.ref_id or "").startswith("ADR-"):
-                add("error", d, "não achei o número do ADR: use 0014-titulo.md, 'ADR-014' no título ou 'id:' no front matter")
+                add("error", d, "não achei o número do ADR: use 0014-titulo.md, ADR-014 ou ADR-flutter-0001 no nome/título, ou 'id:' no front matter")
             elif ids[d.ref_id] > 1:
                 add("error", d, f"{d.ref_id} aparece em mais de um arquivo")
             if not d.status:

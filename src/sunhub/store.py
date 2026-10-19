@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS usage(
   hits INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts);
+CREATE TABLE IF NOT EXISTS meta(
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 CREATE TABLE IF NOT EXISTS vectors(
   uid TEXT PRIMARY KEY,
   model TEXT NOT NULL,
@@ -168,6 +172,7 @@ class Store:
         with self.conn:
             self._delete_source(source)
             self.conn.execute("DELETE FROM sources_state WHERE name = ?", (source,))
+            self.conn.execute("DELETE FROM meta WHERE key = ?", (f"indexer:{source}",))
 
     # ------------------------------------------------------------ leitura
     @staticmethod
@@ -239,6 +244,17 @@ class Store:
                 for r in rows}
 
     # ------------------------------------------------------------ estado das fontes
+    def meta_get(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def meta_set(self, key: str, value: str | None) -> None:
+        with self.conn:
+            if value is None:
+                self.conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+            else:
+                self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))
+
     def set_state(self, name: str, commit: str | None, error: str | None) -> None:
         with self.conn:
             prev = self.get_state(name)

@@ -129,7 +129,7 @@ sunhub app                                       # abre o app de desktop
 
 ## Referências que você pode usar no prompt
 
-`adr:14` · `ADR-014` · `skill:api-standards` · `guideline:rest-naming` · `antipattern:god-object` ·
+`adr:14` · `ADR-014` · `ADR-flutter-0001` · `adr:flutter-1` · `skill:api-standards` · `guideline:rest-naming` · `antipattern:god-object` ·
 `doc:setup` · `<fonte>:<caminho/arquivo.md>`
 
 ## Como o conteúdo é reconhecido
@@ -139,13 +139,14 @@ Sem configuração, por convenção de pastas:
 | Tipo | Detectado por |
 |---|---|
 | skill | pasta com `SKILL.md` (a pasta inteira é publicada) |
-| adr | `adr/`, `adrs/`, `decisions/`, `decisoes/` ou arquivo `adr-NNN-*.md` |
-| guideline | `guidelines/`, `standards/`, `conventions/`, `rules/`, `regras/`, `padroes/`, `diretrizes/`, `guias/` |
+| adr | `adr/`, `adrs/`, `decisions/`, `decisoes/` (também numeradas: `02-adrs/`) ou arquivo `ADR-NNN-*.md` / `ADR-<stack>-NNNN-*.md`. `README`, `index` e templates dentro delas ficam como doc |
+| guideline | `guidelines/` (ou `03-guidelines/`), `standards/`, `conventions/`, `rules/`, `regras/`, `padroes/`, `diretrizes/`, `guias/` |
 | antipattern | `antipatterns/`, `anti-patterns/`, `antipadroes/` |
 | doc | qualquer outro `.md`, `.rst`, `.txt`, `.adoc`, `.html` (exports) e `.pdf` com texto |
 
-ADRs em formato livre: o número vem do front matter (`id:`), do nome do arquivo (`0014-...`, `ADR-014`) ou do
-título; o status vem de `status:` no front matter, de uma linha `Status: Aceito` ou de uma seção `## Status`.
+ADRs em formato livre: o número vem do front matter (`id:`), do nome do arquivo (`0014-...`, `ADR-014`,
+`ADR-flutter-0001`) ou do título. Com escopo (`ADR-flutter-0001`, `ADR-dotnet-0001`) cada stack tem a sua numeração
+e `adr:1` sem escopo mostra todos os "0001"; o status vem de `status:` no front matter, de uma linha `Status: Aceito` ou de uma seção `## Status`.
 Termos em português (aceito, proposto, substituído, obsoleto, rejeitado) são reconhecidos.
 
 Para outro layout, coloque um `sunhub.toml` na raiz do repositório de conhecimento:

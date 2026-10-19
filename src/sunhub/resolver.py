@@ -1,23 +1,17 @@
 """Resolve referências usadas em prompts e na CLI.
 
-    adr:14 · adr:ADR-014 · ADR-014 · skill:api-standards · guideline:rest-naming
+    adr:14 · adr:ADR-014 · ADR-014 · ADR-flutter-0001 · adr:flutter-1 · skill:api-standards
     antipattern:god-object · doc:setup · <fonte>:<caminho/arquivo.md>
 """
 from __future__ import annotations
 
 import re
 
-from sunhub.indexer import slugify
+from sunhub.indexer import parse_adr_key, parse_adr_ref, slugify
 from sunhub.models import KINDS, Document
 from sunhub.store import Store
 
 REF_RE = re.compile(r"^(?P<prefix>[A-Za-z0-9._-]+)\s*:\s*(?P<key>.+)$")
-BARE_ADR_RE = re.compile(r"^ADR[-_ ]?(\d+)$", re.I)
-
-
-def _adr_number(text: str | None) -> int | None:
-    m = re.search(r"(\d+)", text or "")
-    return int(m.group(1)) if m else None
 
 
 def _rank(docs: list[Document], priorities: dict[str, int]) -> list[Document]:
@@ -33,8 +27,7 @@ def resolve(store: Store, ref: str, priorities: dict[str, int] | None = None,
     if not ref:
         return None, []
     kind, key = None, ref
-    m = BARE_ADR_RE.match(ref)
-    if m:
+    if re.match(r"^ADR", ref, re.I) and parse_adr_key(ref):
         kind, key = "adr", ref
     else:
         m = REF_RE.match(ref)
@@ -61,10 +54,13 @@ def resolve(store: Store, ref: str, priorities: dict[str, int] | None = None,
 def _candidates(store: Store, kind: str | None, key: str, sources: list[str] | None = None) -> list[Document]:
     kinds = [kind] if kind else list(KINDS)
     if "adr" in kinds:
-        num = _adr_number(key) if re.fullmatch(r"(?:ADR[-_ ]?)?\d+", key, re.I) else None
-        if num is not None:
-            hits = [d for d in store.list(kind="adr", sources=sources)
-                    if _adr_number(d.ref_id) == num and (d.ref_id or "").upper().startswith("ADR")]
+        want = parse_adr_key(key)
+        if want is not None:
+            adrs = [(d, parse_adr_ref(d.ref_id)) for d in store.list(kind="adr", sources=sources)
+                    if (d.ref_id or "").upper().startswith("ADR")]
+            hits = [d for d, got in adrs if got == want]
+            if not hits and want[0] is None:  # "adr:1" sem escopo: vale ADR-flutter-0001, ADR-dotnet-0001…
+                hits = [d for d, got in adrs if got and got[1] == want[1]]
             if hits:
                 return hits
     for k in kinds:

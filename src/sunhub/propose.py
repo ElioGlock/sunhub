@@ -57,7 +57,8 @@ def _pick_source(cfg: Config, store: Store, name: str | None) -> Source:
 def layout(store: Store, src: Source) -> dict:
     """Descobre pasta, numeração, padrão de nome e template a partir dos ADRs existentes."""
     adrs = [d for d in store.list(kind="adr", source=src.name) if (d.ref_id or "").startswith("ADR-")]
-    numbers = [int(re.sub(r"\D", "", d.ref_id)) for d in adrs]
+    parsed = [r for d in adrs if (r := indexer.parse_adr_ref(d.ref_id))]
+    numbers = [n for s, n in parsed if s is None] or [n for _, n in parsed]
     folder = Counter(str(PurePosixPath(d.path).parent) for d in adrs).most_common(1)
     folder = folder[0][0] if folder else "docs/adr"
     width, prefix, sep = 4, "", "-"

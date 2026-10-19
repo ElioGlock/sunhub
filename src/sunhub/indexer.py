@@ -23,6 +23,8 @@ else:  # pragma: no cover
     import tomli as tomllib
 
 OVERRIDE_FILE = "sunhub.toml"
+# Muda quando a classificação/extração muda: o próximo sync reindexa tudo (sem gerar "novidades").
+VERSION = "2"
 SKILL_FILE = "SKILL.md"
 TEXT_EXT = {".md", ".markdown", ".mdx", ".rst", ".txt", ".adoc"}
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".idea", ".vscode", ".tox"}
@@ -34,15 +36,29 @@ GUIDELINE_DIRS = {"guidelines", "guideline", "standards", "conventions", "rules"
                   "padrões", "diretrizes", "boas-praticas", "boas-práticas", "guides", "guias"}
 ANTIPATTERN_DIRS = {"antipatterns", "anti-patterns", "anti_patterns", "antipattern", "antipadroes",
                     "antipadrões", "anti-padroes", "anti-padrões"}
+ORDER_PREFIX_RE = re.compile(r"^\d+[-_. ]+")  # "02-adrs" -> "adrs" (pastas numeradas para ordenar)
+# ID de ADR, com escopo opcional: ADR-014 · ADR 14 · ADR-flutter-0001 · ADR_dotnet_0002 · ADR-front-end-0003
+ADR_SCOPE = r"[A-Za-z][A-Za-z0-9+#]*(?:[-_][A-Za-z][A-Za-z0-9+#]*)*"
+ADR_REF = rf"ADR(?:[-_](?P<scope>{ADR_SCOPE})[-_]|[-_ ]?)0*(?P<num>\d{{1,5}})"
+ADR_REF_RE = re.compile(rf"\b{ADR_REF}\b", re.I)
+ADR_KEY_RE = re.compile(rf"^(?:ADR[-_ ]?)?(?:(?P<scope>{ADR_SCOPE})[-_ ])?0*(?P<num>\d{{1,5}})$", re.I)
+ADR_FILE_RE = re.compile(rf"^adr(?:[-_]{ADR_SCOPE}[-_]|[-_ ]?)\d+", re.I)
+# Arquivos que vivem na pasta de ADRs mas não são ADRs
+NOT_ADR_RE = re.compile(r"^(?:readme|index|_index|indice|índice|sumario|sumário|toc|summary|changelog|"
+                        r"contributing)$|templat|modelo|exemplo|example", re.I)
 
 FM_RE = re.compile(r"\A﻿?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
 H1_RE = re.compile(r"^#[ \t]+(.+?)[ \t#]*$", re.M)
-ADR_NUM_RE = re.compile(r"\bADR[-_ ]?0*(\d{1,5})\b", re.I)
 LEADING_NUM_RE = re.compile(r"^0*(\d{1,5})(?=[-_ .])")
 STATUS_LINE_RE = re.compile(r"^[ \t>*_|-]*(?:status|situação|situacao|estado)[*_]*[ \t]*[:：][ \t]*[*_]*[ \t]*(.+)$", re.I | re.M)
 STATUS_HEADING_RE = re.compile(r"^#{1,6}[ \t]*(?:status|situação|situacao|estado)[ \t]*$\s*^[ \t>*_-]*(.+)$", re.I | re.M)
-SUPERSEDED_BY_RE = re.compile(r"(?:superseded[ \t]+by|substitu[íi]d[oa][ \t]+(?:por|pelo|pela))[ \t:*_\[]*(ADR[-_ ]?\d+)", re.I)
-SUPERSEDES_RE = re.compile(r"(?:\bsupersedes\b|\bsubstitui\b)[ \t:*_\[]*(ADR[-_ ]?\d+)", re.I)
+_ADR_TOKEN = rf"(ADR(?:[-_]{ADR_SCOPE}[-_]|[-_ ]?)\d+)"
+SUPERSEDED_BY_RE = re.compile(rf"(?:superseded[ \t]+by|substitu[íi]d[oa][ \t]+(?:por|pelo|pela))[ \t:*_\[]*{_ADR_TOKEN}", re.I)
+SUPERSEDES_RE = re.compile(rf"(?:\bsupersedes\b|\bsubstitui\b)[ \t:*_\[]*{_ADR_TOKEN}", re.I)
+DATE_LINE_RE = re.compile(r"^[ \t>*_|-]*(?:data|date)[*_]*[ \t]*[:：][ \t]*[*_]*[ \t]*(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})",
+                          re.I | re.M)
+SCOPE_LINE_RE = re.compile(r"^[ \t>*_|-]*(?:escopo|scope|stack)[*_]*[ \t]*[:：][ \t]*[*_]*[ \t]*([\w.+# -]{1,40})$",
+                           re.I | re.M)
 
 STATUS_ALIASES = {
     "accepted": "accepted", "approved": "accepted", "aceito": "accepted", "aceita": "accepted",
@@ -65,8 +81,30 @@ def slugify(text: str) -> str:
     return text[:80] or "doc"
 
 
-def adr_id(number: int | str) -> str:
-    return f"ADR-{int(number):03d}"
+def adr_id(number: int | str, scope: str | None = None) -> str:
+    """ID canônico: ADR-014 ou, com escopo, ADR-flutter-0001 (cada stack tem a sua numeração)."""
+    n = int(number)
+    return f"ADR-{scope.lower()}-{n:04d}" if scope else f"ADR-{n:03d}"
+
+
+def parse_adr_ref(text: str | None) -> tuple[str | None, int] | None:
+    """Primeiro ID de ADR no texto -> (escopo, número). "ADR-flutter-0001: X" -> ("flutter", 1)."""
+    m = ADR_REF_RE.search(text or "")
+    return ((m.group("scope") or "").lower() or None, int(m.group("num"))) if m else None
+
+
+def parse_adr_key(text: str | None) -> tuple[str | None, int] | None:
+    """Referência digitada pelo usuário: 14 · ADR-014 · flutter-1 · ADR-flutter-0001."""
+    m = ADR_KEY_RE.match((text or "").strip())
+    return ((m.group("scope") or "").lower() or None, int(m.group("num"))) if m else None
+
+
+def _adr_ref_id(text) -> str | None:
+    r = parse_adr_ref(str(text))
+    if r:
+        return adr_id(r[1], r[0])
+    m = re.search(r"\d+", str(text))
+    return adr_id(m.group(0)) if m else None
 
 
 def normalize_status(raw: str | None) -> str | None:
@@ -154,12 +192,14 @@ def classify(rel: str, overrides: Overrides | None = None) -> str | None:
     forced = overrides.kind_for(rel)
     if forced:
         return forced
-    segs = {s.lower() for s in p.parent.parts}
+    segs = {ORDER_PREFIX_RE.sub("", s.lower()) for s in p.parent.parts}
     name = p.name.lower()
     if segs & ANTIPATTERN_DIRS or "antipattern" in name or "anti-pattern" in name:
         return "antipattern"
-    if segs & ADR_DIRS or re.match(r"^adr[-_ ]?\d+", name):
-        return "adr"
+    if ADR_FILE_RE.match(name):
+        return "doc" if NOT_ADR_RE.search(p.stem) else "adr"
+    if segs & ADR_DIRS:
+        return "doc" if NOT_ADR_RE.search(ORDER_PREFIX_RE.sub("", p.stem)) else "adr"
     if segs & GUIDELINE_DIRS:
         return "guideline"
     return "doc"
@@ -241,43 +281,52 @@ def parse_document(root: Path, rel: str, source: str, kind: str, commit: str | N
     status = normalize_status(fm.get("status"))
 
     if kind == "adr":
-        number = None
+        ref_id = None
         for key in ("id", "adr", "number"):
             if fm.get(key) is not None:
-                m = re.search(r"\d+", str(fm[key]))
-                if m:
-                    number = m.group(0)
+                ref_id = _adr_ref_id(fm[key])
+                if ref_id:
                     break
         for text in (p.name, title):
-            if number is None:
-                m = ADR_NUM_RE.search(text)
-                number = m.group(1) if m else None
-        if number is None:
+            if ref_id is None:
+                r = parse_adr_ref(text)
+                ref_id = adr_id(r[1], r[0]) if r else None
+        if ref_id is None:
             m = LEADING_NUM_RE.match(p.name)
-            number = m.group(1) if m else None
-        ref_id = adr_id(number) if number is not None else slugify(p.stem)
+            ref_id = adr_id(m.group(1)) if m else slugify(p.stem)
+        parsed = parse_adr_ref(ref_id)
+        scope = (parsed[0] if parsed else None) or fm.get("scope") or fm.get("escopo")
+        if not scope:
+            m = SCOPE_LINE_RE.search(head)
+            scope = m.group(1).strip() if m else None
+        if scope:
+            extra["scope"] = str(scope).strip().lower()
         if not status:
             m = STATUS_LINE_RE.search(head) or STATUS_HEADING_RE.search(head)
             status = normalize_status(m.group(1)) if m else None
         sb = fm.get("superseded_by") or fm.get("superseded-by")
         m = SUPERSEDED_BY_RE.search(head)
         if sb or m:
-            num = re.search(r"\d+", str(sb or m.group(1)))
-            if num:
-                extra["superseded_by"] = adr_id(num.group(0))
+            target = _adr_ref_id(sb or m.group(1))
+            if target:
+                extra["superseded_by"] = target
                 status = status if status not in (None, "accepted") else "superseded"
         sp = fm.get("supersedes")
         found = [sp] if isinstance(sp, (str, int)) else list(sp or [])
         found += SUPERSEDES_RE.findall(head)
         sup = []
         for item in found:
-            num = re.search(r"\d+", str(item))
-            if num and adr_id(num.group(0)) not in sup and adr_id(num.group(0)) != ref_id:
-                sup.append(adr_id(num.group(0)))
+            target = _adr_ref_id(item)
+            if target and target not in sup and target != ref_id:
+                sup.append(target)
         if sup:
             extra["supersedes"] = sup
         if fm.get("date"):
             extra["date"] = str(fm.get("date"))
+        else:
+            m = DATE_LINE_RE.search(head)
+            if m:
+                extra["date"] = m.group(1)
     else:
         stem = p.stem
         if stem.lower() in ("readme", "index") and p.parent.name:

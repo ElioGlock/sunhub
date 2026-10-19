@@ -147,6 +147,10 @@ def _diff(source: str, before: dict, after: dict, commit: str | None) -> list[di
 def sync_source(src: Source, store: Store, full: bool = False, base: Source | None = None) -> SyncResult:
     root = src.checkout_dir()
     before = store.snapshot(src.name)
+    # Sunhub atualizado com nova forma de classificar: reindexa tudo, sem virar "novidade" no feed
+    upgrade = store.meta_get(f"indexer:{src.name}") != indexer.VERSION
+    full = full or upgrade
+    quiet = upgrade and bool(before)
     try:
         commit = None
         old = new = None
@@ -177,13 +181,15 @@ def sync_source(src: Source, store: Store, full: bool = False, base: Source | No
             docs = _overlay_docs(src, root, base, commit)
             if docs is not None:
                 store.replace_source(src.name, docs)
-                rows = _diff(src.name, before, store.snapshot(src.name), commit)
+                rows = [] if quiet else _diff(src.name, before, store.snapshot(src.name), commit)
                 store.add_changes(rows)
                 store.set_state(src.name, commit, None)
+                store.meta_set(f"indexer:{src.name}", indexer.VERSION)
                 return SyncResult(src.name, True, changed, store.count(src.name), commit, None,
                                   f"{detail}; só diferenças em relação a {base.name}", rows)
         elif base:
             store.set_state(src.name, commit, None)
+            store.meta_set(f"indexer:{src.name}", indexer.VERSION)
             return SyncResult(src.name, True, False, store.count(src.name), commit, None,
                               f"{detail}; só diferenças em relação a {base.name}")
 
@@ -202,9 +208,10 @@ def sync_source(src: Source, store: Store, full: bool = False, base: Source | No
             store.replace_source(src.name, indexer.index_source(src.name, root, commit))
         else:
             reindexed = False
-        rows = _diff(src.name, before, store.snapshot(src.name), commit) if reindexed else []
+        rows = _diff(src.name, before, store.snapshot(src.name), commit) if reindexed and not quiet else []
         store.add_changes(rows)
         store.set_state(src.name, commit, None)
+        store.meta_set(f"indexer:{src.name}", indexer.VERSION)
         return SyncResult(src.name, True, changed, store.count(src.name), commit, None, detail, rows)
     except (git.GitError, SyncError, OSError) as e:
         store.set_state(src.name, None, str(e))
